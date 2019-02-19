@@ -234,14 +234,14 @@ static bool parse_str(struct state *st)
                 if (cp >= 0xD800 && cp <= 0xDBFF) {
                     if (!skip_str(st, "\\u")) {
                         json_err(st, "missing low surrogate pair");
-                        return -1;
+                        return false;
                     }
                     v = parse_numeric_escape(st);
                     if (v < 0)
                         return false;
                     if (v < 0xDC00 || v > 0xDFFF) {
                         json_err(st, "invalid low surrogate pair");
-                        return -1;
+                        return false;
                     }
                     cp = ((cp & 0x3FF) << 10) + (v & 0x3FF) + 0x10000;
                 }

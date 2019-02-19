@@ -104,6 +104,8 @@ int main(void)
     // Must fail.
     parsegen_test("  truek", "<error>");
     parsegen_test("{", "<error>");
+    parsegen_test("\"\\uDBFFa", "<error>");
+    parsegen_test("\"\\uDBFF\\uAFFF\"", "<error>");
     // Should fail. There are various extensions to JSON which allow them (and
     // we could support them), but they are not part of standard JSON.
     parsegen_test("{field: hello}", "<error>");
