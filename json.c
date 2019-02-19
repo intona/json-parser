@@ -17,6 +17,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -273,7 +274,7 @@ static bool parse_number(struct state *st, struct json_tok *tok)
     char *endptr;
     errno = 0;
     double v = strtod(st->text, &endptr);
-    if (endptr == st->text || errno)
+    if (endptr == st->text || errno || !isfinite(v))
         return false; // error message handled by parse_value()
     st->text = endptr;
     tok->type = JSON_TYPE_DOUBLE;

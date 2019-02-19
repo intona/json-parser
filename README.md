@@ -32,6 +32,8 @@ Hints for embedded use
 - strtod() is very bloated on some embedded libcs. If you do not require correct
   float conversion, this simple strtod() function can be easily adapted:
   https://github.com/libass/libass/blob/master/libass/ass_strtod.c
+- The only math.h symbol, isfinite(), is trivially replaceable, or can be
+  removed entirely (the parser will then accept inf/nan).
 - It uses assert() in at least one place. Some embedded libcs will pull in stdio
   for it, so you may want to comment all of its uses.
 - In addition, it uses some simple string functions, which should not pose any
