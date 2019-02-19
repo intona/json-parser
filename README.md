@@ -35,8 +35,6 @@ Hints for embedded use
   Or extract musl-libc's implementation for something if you need correctness.
 - The only math.h symbol, isfinite(), is trivially replaceable, or can be
   removed entirely (the parser will then accept inf/nan).
-- It uses assert() in at least one place. Some embedded libcs will pull in stdio
-  for it, so you may want to comment all of its uses.
 - In addition, it uses some simple string functions, which should not pose any
   trouble.
 - The only required C11 feature that is not available in C99 is the use of the

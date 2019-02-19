@@ -14,7 +14,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <assert.h>
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -40,13 +39,10 @@ static void json_err(struct state *st, const char *msg)
         st->msg.cb(st->msg.opaque, (st)->text - (st)->start, msg);
 }
 
-// Return 0 if not power of 2, 1 if power of 2. Only use on unsigned integers.
-#define IS_POWER_OF_2(u) ((u) > 0 && !(((u) - 1) & (u)))
-
+// Allocate memory of size obj_size, with the alignment in obj_align. obj_align
+// _must_ be a power of 2.
 static void *json_alloc(struct state *st, size_t obj_align, size_t obj_size)
 {
-    assert(IS_POWER_OF_2(obj_align));
-
     uintptr_t sptr = (uintptr_t)st->mem;
     uintptr_t res = (sptr + (obj_align - 1)) & ~(obj_align - 1);
     uintptr_t nptr = res + obj_size;
