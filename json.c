@@ -217,6 +217,8 @@ static bool parse_str(struct state *st)
             switch (c) {
             case '\\': c = '\\'; break;
             case '\"': c = '\"'; break;
+            case '/':  c = '/';  break;
+            case 'b':  c = '\b'; break;
             case 'f':  c = '\f'; break;
             case 'n':  c = '\n'; break;
             case 'r':  c = '\r'; break;
