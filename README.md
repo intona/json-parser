@@ -32,6 +32,7 @@ Hints for embedded use
 - strtod() is very bloated on some embedded libcs. If you do not require correct
   float conversion, this simple strtod() function can be easily adapted:
   https://github.com/libass/libass/blob/master/libass/ass_strtod.c
+  Or extract musl-libc's implementation for something if you need correctness.
 - The only math.h symbol, isfinite(), is trivially replaceable, or can be
   removed entirely (the parser will then accept inf/nan).
 - It uses assert() in at least one place. Some embedded libcs will pull in stdio
@@ -60,11 +61,34 @@ allocate a linear array. You would either have to parse the JSON in multiple
 passes to preallocate the array with the correct number of elements, or have to
 use a complete memory manager that efficiently supports realloc().
 
-Test program
-------------
+Test programs
+-------------
 
-This is a simple test of the parser. It uses the Meson build system:
-https://mesonbuild.com/Quick-guide.html
+These use the Meson build system: https://mesonbuild.com/Quick-guide.html
+
+test/test.c is a simple test of the parser and some of the helpers.
+
+test/parser.c expects a filename as argument, and returns success or failure.
+On failure, it also prints the error. This is suitable for use with
+[JSONTestSuite][1]. (As of this writing, it passed all tests, except some
+SHOULD_HAVE_FAILEDs with number strictness, and 2 SHOULD_HAVE_PASSED where this
+parser rejects escapes resulting in strings with embedded zeros.)
+
+Known deviations from standard JSON
+-----------------------------------
+
+- Number parsing is not very strict and allows anything strtod() allows.
+- Some JSON variants require support other encodings (such as UTF-16), while
+  this parser requires UTF-8.
+- Some JSON variants require strict UTF-8, while this parser does not check
+  whether input text is valid UTF-8. The API user must check for valid UTF-8 on
+  its own if required.
+- Some JSON variants require rejecting duplicate object keys, which this parser
+  does not do.
+- According to some, standard JSON technically allows embedding \0 in strings
+  with "\u0000" escapes. This parser explicitly rejects them, because the API
+  uses C strings, which cannot represent strings with embedded zeros. (Also
+  consider section 9 in RFC 8259.)
 
 TODO
 ----
@@ -80,3 +104,8 @@ License
 -------
 
 ISC (permissive, similar to BSD and MIT)
+
+Links
+-----
+
+[1]: https://github.com/nst/JSONTestSuite
