@@ -75,7 +75,7 @@ static void example(void)
     assert(sum == 12 + 34 + 56);
 }
 
-int main()
+int main(void)
 {
     example();
     parsegen_test("  { }  ", "{}");
