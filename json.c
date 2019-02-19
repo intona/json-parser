@@ -202,7 +202,7 @@ static bool parse_str(struct state *st)
 {
     char *dst = st->text;
     while (1) {
-        char c = st->text[0];
+        unsigned char c = st->text[0];
         if (!c) {
             json_err(st, "closing '\"' missing in string literal");
             return false;
@@ -211,6 +211,9 @@ static bool parse_str(struct state *st)
         if (c == '"') {
             *dst = '\0';
             return true;
+        } else if (c <= 0x1F) {
+            json_err(st, "unescaped control character in string literal");
+            return false;
         } else if (c == '\\') {
             c = st->text[0];
             if (c)
