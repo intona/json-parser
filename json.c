@@ -66,7 +66,7 @@ static void *json_alloc(struct state *st, size_t obj_align, size_t obj_size)
 #define JSON_ALLOC(T, st) \
     (T *)json_alloc(st, _Alignof(T), sizeof(T))
 
-static bool parse_value(struct state *st, struct json_tok *tok);
+static bool parse_value(struct state *st, struct json_tok *tok, int d);
 
 static void skip_ws(struct state *st)
 {
@@ -84,7 +84,7 @@ static bool skip_str(struct state *st, const char *str)
 }
 
 // Parse JSON_TYPE_OBJECT or JSON_TYPE_ARRAY into tok.
-static bool parse_list(struct state *st, struct json_tok *tok)
+static bool parse_list(struct state *st, struct json_tok *tok, int d)
 {
     struct json_list *list = JSON_ALLOC(struct json_list, st);
     if (!list)
@@ -113,7 +113,7 @@ static bool parse_list(struct state *st, struct json_tok *tok)
 
         if (tok->type == JSON_TYPE_OBJECT) {
             struct json_tok tmp;
-            if (!parse_value(st, &tmp) || tmp.type != JSON_TYPE_STRING) {
+            if (!parse_value(st, &tmp, d) || tmp.type != JSON_TYPE_STRING) {
                 json_err(st, "object member name expected (quoted string)");
                 return false;
             }
@@ -124,7 +124,7 @@ static bool parse_list(struct state *st, struct json_tok *tok)
             item->key = tmp.u.str;
         }
 
-        if (!parse_value(st, &item->value)) {
+        if (!parse_value(st, &item->value, d)) {
             json_err(st, "array/object value expected");
             return false;
         }
@@ -280,8 +280,14 @@ static bool parse_number(struct state *st, struct json_tok *tok)
 // This will parse e.g. "truek" as JSON_TYPE_BOOL and move *text to "k", but
 // this is OK as the "k" could never be valid syntax in the parsing after it.
 // Returns NULL on any error.
-static bool parse_value(struct state *st, struct json_tok *tok)
+static bool parse_value(struct state *st, struct json_tok *tok, int d)
 {
+    if (d == 0) {
+        json_err(st, "maximum nesting depth reached");
+        return false;
+    }
+    d--;
+
     skip_ws(st);
 
     char c = st->text[0];
@@ -310,7 +316,7 @@ static bool parse_value(struct state *st, struct json_tok *tok)
     case '{':
         tok->type = c == '[' ? JSON_TYPE_ARRAY : JSON_TYPE_OBJECT;
         st->text += 1;
-        return parse_list(st, tok);
+        return parse_list(st, tok, d);
     case '"': {
         st->text += 1;
         tok->type = JSON_TYPE_STRING;
@@ -327,12 +333,12 @@ static bool parse_value(struct state *st, struct json_tok *tok)
     return false;
 }
 
-static struct json_tok *parse(struct state *st)
+static struct json_tok *parse(struct state *st, int d)
 {
     struct json_tok *res = JSON_ALLOC(struct json_tok, st);
     if (!res)
         return NULL;
-    if (!parse_value(st, res)) {
+    if (!parse_value(st, res, d)) {
         json_err(st, "character does not start a valid JSON token");
         return NULL;
     }
@@ -346,7 +352,7 @@ static struct json_tok *parse(struct state *st)
 }
 
 struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
-                                        struct json_msg_cb *msg_ctx)
+                                        int depth, struct json_msg_cb *msg_ctx)
 {
     struct state st = {
         .start = text,
@@ -355,11 +361,11 @@ struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
         .mem_size = mem_size,
         .msg = msg_ctx ? *msg_ctx : (struct json_msg_cb){0},
     };
-    return parse(&st);
+    return parse(&st, depth);
 }
 
 struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
-                            struct json_msg_cb *msg_ctx)
+                            int depth, struct json_msg_cb *msg_ctx)
 {
     struct state st = {
         // json_err() needs to have this set, but won't mutate it.
@@ -375,5 +381,5 @@ struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
         return NULL;
     memcpy(tmp, text, len);
     st.text = st.start = tmp;
-    return parse(&st);
+    return parse(&st, depth);
 }

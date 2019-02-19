@@ -29,7 +29,7 @@ static struct json_tok *parse(const char *text)
         .cb = json_msg_cb,
     };
 
-    return json_parse_destructive(tmp1, tmp2, sizeof(tmp2), &cb);
+    return json_parse_destructive(tmp1, tmp2, sizeof(tmp2), 100, &cb);
 }
 
 static void parsegen_test(const char *text, const char *expect)
@@ -60,7 +60,7 @@ static void example(void)
     // JSON text to parse.
     static const char input[] = "{\"key1\": 123, \"key2\": [12, 34, 56]}";
 
-    struct json_tok *t = json_parse(input, tmp, sizeof(tmp), NULL);
+    struct json_tok *t = json_parse(input, tmp, sizeof(tmp), 100, NULL);
 
     assert(json_get_int(t, "key1", -1) == 123);
 

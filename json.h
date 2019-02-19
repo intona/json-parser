@@ -81,13 +81,14 @@ struct json_msg_cb {
 //  text: JSON source (mutated by parser, and returned tokens reference it!)
 //  mem: scratch memory (will be overwritten and referenced by returned tokens)
 //  mem_size: size of mem memory area in bytes that can be used
+//  depth: maximum allowed recursion/nested object depth (e.g. 1 allows 1 object)
 //  msg_ctx: for receiving parser messages; can be NULL (=> no messages)
 //  returns: root token, or NULL on error
 struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
-                                        struct json_msg_cb *msg_ctx);
+                                        int depth, struct json_msg_cb *msg_ctx);
 
 // Like json_parse_destructive(), but does not mutate the input.
 struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
-                            struct json_msg_cb *msg_ctx);
+                            int depth, struct json_msg_cb *msg_ctx);
 
 #endif
