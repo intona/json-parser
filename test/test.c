@@ -86,8 +86,8 @@ int main(void)
     parsegen_test("{\"field1\": \"test\", \"field2\" : 2}",
                   "{\"field1\":\"test\",\"field2\":2}");
     parsegen_test(" [ 3, 4, true, false ,null ] ", "[3,4,true,false,null]");
-    parsegen_test("\"he\\u003a\t\\t\\u001cll\\\\o \\\"there\"",
-                  "\"he:\\t\\t\\u001cll\\\\o \\\"there\"");
+    parsegen_test("\"he\\u003a\\t\\u001cll\\\\o \\\"there\"",
+                  "\"he:\\t\\u001cll\\\\o \\\"there\"");
     // Unicode escapes (for UTF-16 surrogate parser and UTF-8 encoder).
     parsegen_test("\"\\uD801\\uDC37\"", "\"𐐷\"");
     parsegen_test("\"\\uD834\\uDD1E\"", "\"𝄞\"");
