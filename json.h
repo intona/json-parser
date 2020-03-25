@@ -95,19 +95,20 @@ struct json_parse_opts {
 // Parse JSON and turn it into a tree of json_tok structs. All tokens are
 // allocated from the provided mem pointer. Returns the root token on success,
 // returns NULL on error (including if mem_size is too small).
-// text is actually mutated during parsing, which is why the function has the
-// suffix _destructive. This is done for performance reasons and to avoid
-// malloc(). String fields in *dst will point into the mutated text.
 //  text: JSON source (mutated by parser, and returned tokens reference it!)
 //  mem: scratch memory (will be overwritten and referenced by returned tokens)
 //  mem_size: size of mem memory area in bytes that can be used
 //  opts: can be NULL
 //  returns: root token, or NULL on error
-struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
-                                        struct json_parse_opts *opts);
-
-// Like json_parse_destructive(), but does not mutate the input.
 struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
                             struct json_parse_opts *opts);
+
+// Like json_parse(), but saves some memory by mutating the input text (which is
+// why the function has the _destructive suffix). This is done for performance
+// reasons and to save copying the input text to the provided memory buffer for
+// internal reasons. String fields in the returned json_tok tree will point into
+// text buffer.
+struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
+                                        struct json_parse_opts *opts);
 
 #endif

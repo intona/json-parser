@@ -14,8 +14,9 @@ The relevant specifications are RFC 8259 and RFC 7493.
 How to use
 ----------
 
-Add json.c and json.h to your build system. Call json_parse_destructive() or
-json_parse(). The arguments and semantics are documented in the header file.
+Add json.c and json.h to your build system. Call json_parse() or
+json_parse_destructive(). The arguments and semantics are documented in the
+header file.
 
 The optional json_out.h/json_out.c files are trivial helpers to write JSON data.
 
@@ -48,6 +49,9 @@ Hints for embedded use
 
 Design choices
 --------------
+
+One of the main features of this code is not using malloc(). This is mainly for
+the sake of embedded use.
 
 The main parsing function, json_parse_destructive(), mutates the input text (i.e.
 it writes to the memory pointed to by the text argument). This is an attempt to
