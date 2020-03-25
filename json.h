@@ -42,25 +42,25 @@ struct json_tok {
         // JSON_TYPE_DOUBLE:
         double d;
         // JSON_TYPE_ARRAY:
+        struct json_array *array;
         // JSON_TYPE_OBJECT:
-        struct json_list *list;
+        struct json_object *object;
     } u;
 };
 
-struct json_list {
-    // Total number of entries (members/array values).
+struct json_array {
     size_t count;
-    struct json_list_item *head;
+    struct json_tok *items;
 };
 
-struct json_list_item {
-    // Array entry value or object member value.
-    struct json_tok value;
-    // JSON_TYPE_OBJECT: the name of the object member
-    // JSON_TYPE_ARRAY: NULL
+struct json_object {
+    size_t count;
+    struct json_object_entry *items;
+};
+
+struct json_object_entry {
     const char *key;
-    // Next element in the array/object order, or NULL on end of list.
-    struct json_list_item *next;
+    struct json_tok value;
 };
 
 struct json_msg_cb {

@@ -25,9 +25,9 @@ struct json_tok *json_get(struct json_tok *j, const char *name)
         return j;
 
     if (j && j->type == JSON_TYPE_OBJECT) {
-        for (struct json_list_item *i = j->u.list->head; i; i = i->next) {
-            if (strcmp(i->key, name) == 0)
-                return &i->value;
+        for (size_t n = 0; n < j->u.object->count; n++) {
+            if (strcmp(j->u.object->items[n].key, name) == 0)
+                return &j->u.object->items[n].value;
         }
     }
 
@@ -59,14 +59,14 @@ bool json_get_bool(struct json_tok *j, const char *name, bool def)
     return j && j->type == JSON_TYPE_BOOL ? j->u.b : def;
 }
 
-struct json_list *json_get_array(struct json_tok *j, const char *name)
+struct json_array *json_get_array(struct json_tok *j, const char *name)
 {
     j = json_get(j, name);
-    return j && j->type == JSON_TYPE_ARRAY ? j->u.list : NULL;
+    return j && j->type == JSON_TYPE_ARRAY ? j->u.array : NULL;
 }
 
-struct json_list *json_get_object(struct json_tok *j, const char *name)
+struct json_object *json_get_object(struct json_tok *j, const char *name)
 {
     j = json_get(j, name);
-    return j && j->type == JSON_TYPE_OBJECT ? j->u.list : NULL;
+    return j && j->type == JSON_TYPE_OBJECT ? j->u.object : NULL;
 }

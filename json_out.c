@@ -241,22 +241,26 @@ void json_out_write(struct json_out *out, struct json_tok *root)
         }
         break;
     }
-    case JSON_TYPE_ARRAY:
+    case JSON_TYPE_ARRAY: {
+        struct json_array *arr = root->u.array;
         json_out_array_start(out);
-        for (struct json_list_item *i = root->u.list->head; i; i = i->next) {
+        for (size_t n = 0; n < arr->count; n++) {
             json_out_array_entry_start(out);
-            json_out_write(out, &i->value);
+            json_out_write(out, &arr->items[n]);
         }
         json_out_array_end(out);
         break;
-    case JSON_TYPE_OBJECT:
+    }
+    case JSON_TYPE_OBJECT: {
+        struct json_object *obj = root->u.object;
         json_out_object_start(out);
-        for (struct json_list_item *i = root->u.list->head; i; i = i->next) {
-            json_out_field_start(out, i->key);
-            json_out_write(out, &i->value);
+        for (size_t n = 0; n < obj->count; n++) {
+            json_out_field_start(out, obj->items[n].key);
+            json_out_write(out, &obj->items[n].value);
         }
         json_out_object_end(out);
         break;
+    }
     default:
         append_str(out, "<error>");
     }

@@ -40,8 +40,8 @@ double json_get_double(struct json_tok *j, const char *name, double def);
 const char *json_get_string(struct json_tok *j, const char *name,
                                   const char *def);
 bool json_get_bool(struct json_tok *j, const char *name, bool def);
-struct json_list *json_get_array(struct json_tok *j, const char *name);
-struct json_list *json_get_object(struct json_tok *j, const char *name);
+struct json_array *json_get_array(struct json_tok *j, const char *name);
+struct json_object *json_get_object(struct json_tok *j, const char *name);
 struct json_tok *json_get(struct json_tok *j, const char *name);
 
 #endif

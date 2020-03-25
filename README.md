@@ -37,10 +37,10 @@ Hints for embedded use
   removed entirely (the parser will then accept inf/nan).
 - In addition, it uses some simple string functions, which should not pose any
   trouble.
-- The only required C11 feature that is not available in C99 is the use of the
-  _Alignof operator. If you do not have a C11 compiler, replace it with 4 or 8
-  (depending on "double" alignment requirements), or 1 if your target
-  architecture supports fast unaligned accesses. Adapting to C89 will be harder.
+- The only required C11 features that are not available in C99 is the use of the
+  _Alignof operator and the static_assert() statement. If you do not have a C11
+  compiler, change MAX_ALIGN to 8 (or 1 if your target CPU supports fast
+  unaligned accesses) and remove the asserts. Adapting to C89 will be harder.
 - json_out.c (not required by the parser) uses stdio's vsnprintf() to format
   numbers. A sufficiently non-bloated libc for embedded use is here:
   https://github.com/mpaland/printf/
@@ -52,12 +52,8 @@ Design choices
 The main parsing function, json_parse_destructive(), mutates the input text (i.e.
 it writes to the memory pointed to by the text argument). This is an attempt to
 save memory. Parsed string values do not need to be allocated from the provided
-memory region.
-
-Arrays are represented as linked lists. This is done because it's hard to
-allocate a linear array. You would either have to parse the JSON in multiple
-passes to preallocate the array with the correct number of elements, or have to
-use a complete memory manager that efficiently supports realloc().
+memory region. The less tricky json_parse() simply copies the full input, and
+then performs destructive parsing on it.
 
 Test programs
 -------------
@@ -97,6 +93,8 @@ TODO
   which can report errors in a human readable way. (Consider you use JSON for
   a network API. You want to provide good error information to API users if e.g.
   a JSON object key is missing or has the wrong type.)
+- There are some optimization opportunities, but which probably would increase
+  code size. (Such as the array/object item reorder copy.)
 
 License
 -------

@@ -65,9 +65,9 @@ static void example(void)
     assert(json_get_int(t, "key1", -1) == 123);
 
     int sum = 0;
-    struct json_list *arr = json_get_array(t, "key2");
-    for (struct json_list_item *c = arr ? arr->head : NULL; c; c = c->next) {
-        int v = json_get_int(&c->value, NULL, -1);
+    struct json_array *arr = json_get_array(t, "key2");
+    for (size_t n = 0; n < arr->count; n++) {
+        int v = json_get_int(&arr->items[n], NULL, -1);
         printf(" array value: %d\n", v);
         sum += v;
     }
