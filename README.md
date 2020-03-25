@@ -11,6 +11,15 @@ of use.
 
 The relevant specifications are RFC 8259 and RFC 7493.
 
+Main features
+-------------
+
+- Small, unintrusive, and complete.
+- Returns an easy to use AST.
+- No malloc(), works on a provided preallocated chunk of memory.
+- Suitable for embedded use. (You may need to provide implementations for some
+  standard functions, see below.)
+
 How to use
 ----------
 
