@@ -63,13 +63,33 @@ struct json_object_entry {
     struct json_tok value;
 };
 
-struct json_msg_cb {
-    // cb() is called with the given opaque field. loc is the byte
-    // position of the error/warning. You know whether it's an error or
-    // warning only after the fact (error => parser returns NULL).
-    void (*cb)(void *opaque, size_t loc, const char *msg);
-    // For free use by cb().
-    void *opaque;
+enum json_error {
+    JSON_ERR_NONE = 0,
+    JSON_ERR_SYNTAX,        // failed due to a syntax error
+    JSON_ERR_NOMEM,         // failed due to provided memory not being enough
+    JSON_ERR_DEPTH,         // failed due to json_parse_opts.depth exceeded
+};
+
+struct json_parse_opts {
+    // Maximum nesting of JSON elements allowed. The parser's depth value starts
+    // out with 1. Every nested object or array adds 1 to it. If the value is
+    // larger than the depth parameter provided here, an error is returned.
+    // depth<=0 sets a positive default value.
+    // The C stack depth used by the parser grows linearly with this depth.
+    int depth;
+
+    // msg_cb() is called with the given opaque field. loc is the byte
+    // position of the error/warning. (The first error sets json_parse_opts.error
+    // before msg_cb is called.)
+    // If this is NULL, no messages are returned.
+    void (*msg_cb)(void *opaque, size_t loc, const char *msg);
+
+    // Passed as first parameter to msg_cb(), unused otherwise.
+    void *msg_cb_opaque;
+
+    // This is always set by json_parse() and related functions. If multiple
+    // errors happen, this is set to the first one that was reported.
+    enum json_error error;
 };
 
 // Parse JSON and turn it into a tree of json_tok structs. All tokens are
@@ -81,14 +101,13 @@ struct json_msg_cb {
 //  text: JSON source (mutated by parser, and returned tokens reference it!)
 //  mem: scratch memory (will be overwritten and referenced by returned tokens)
 //  mem_size: size of mem memory area in bytes that can be used
-//  depth: maximum allowed recursion/nested object depth (e.g. 1 allows 1 object)
-//  msg_ctx: for receiving parser messages; can be NULL (=> no messages)
+//  opts: can be NULL
 //  returns: root token, or NULL on error
 struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
-                                        int depth, struct json_msg_cb *msg_ctx);
+                                        struct json_parse_opts *opts);
 
 // Like json_parse_destructive(), but does not mutate the input.
 struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
-                            int depth, struct json_msg_cb *msg_ctx);
+                            struct json_parse_opts *opts);
 
 #endif

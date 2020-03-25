@@ -114,8 +114,8 @@ int main(int argc, char **argv)
     if (!memory)
         goto error_size;
 
-    struct json_msg_cb cb = {json_msg_cb};
-    struct json_tok *tok = json_parse(data, memory, memory_size, 1000, &cb);
+    struct json_parse_opts opts = {.depth = 1000, .msg_cb = json_msg_cb};
+    struct json_tok *tok = json_parse(data, memory, memory_size, &opts);
     if (tok) {
         printf("Success.\n");
         if (dump)

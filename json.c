@@ -32,7 +32,7 @@ struct state {
     char *mem_ptr;      // offset for allocations
     char *stack_ptr;    // offset for stack
     char *mem_end;
-    struct json_msg_cb msg;
+    struct json_parse_opts *opts;
 };
 
 // Maximum alignment for any of the temporary allocations. This is a
@@ -43,10 +43,17 @@ static_assert(MAX_ALIGN >= _Alignof(struct json_array), "");
 static_assert(MAX_ALIGN >= _Alignof(struct json_object), "");
 static_assert(MAX_ALIGN >= _Alignof(struct json_object_entry), "");
 
+static void json_err_val(struct state *st, int err, const char *msg)
+{
+    if (!st->opts->error)
+        st->opts->error = err;
+    if (st->opts->msg_cb)
+        st->opts->msg_cb(st->opts->msg_cb_opaque, (st)->text - (st)->start, msg);
+}
+
 static void json_err(struct state *st, const char *msg)
 {
-    if (st->msg.cb)
-        st->msg.cb(st->msg.opaque, (st)->text - (st)->start, msg);
+    json_err_val(st, JSON_ERR_SYNTAX, msg);
 }
 
 // Allocate memory of given size, with MAX_ALIGN alignment.
@@ -70,7 +77,7 @@ static void *json_alloc(struct state *st, size_t obj_size)
 static void *json_stack_alloc(struct state *st, size_t obj_size)
 {
     if (obj_size > st->stack_ptr - st->mem_ptr || (obj_size & (MAX_ALIGN - 1))) {
-        json_err(st, "out of memory");
+        json_err_val(st, JSON_ERR_NOMEM, "out of memory");
         return NULL;
     }
     st->stack_ptr -= obj_size;
@@ -107,6 +114,12 @@ static bool skip_str(struct state *st, const char *str)
 // Parse JSON_TYPE_OBJECT or JSON_TYPE_ARRAY into tok.
 static bool parse_list(struct state *st, struct json_tok *tok, int d)
 {
+    d--;
+    if (d == 0) {
+        json_err_val(st, JSON_ERR_DEPTH, "maximum nesting depth reached");
+        return false;
+    }
+
     // At the end of the parsing loop, all items will have been "pushed" to
     // the stack between st->stack_ptr and stack_end (in reverse order).
     char *stack_end = st->stack_ptr;
@@ -326,12 +339,6 @@ static bool parse_number(struct state *st, struct json_tok *tok)
 // Returns NULL on any error.
 static bool parse_value(struct state *st, struct json_tok *tok, int d)
 {
-    if (d == 0) {
-        json_err(st, "maximum nesting depth reached");
-        return false;
-    }
-    d--;
-
     skip_ws(st);
 
     char c = st->text[0];
@@ -374,23 +381,28 @@ static bool parse_value(struct state *st, struct json_tok *tok, int d)
         return true;
     }
 
+    json_err(st, "character does not start a valid JSON token");
     return false;
 }
 
 static struct json_tok *do_parse(const char *text, bool copy, void *mem,
-                                 size_t mem_size, int depth,
-                                 struct json_msg_cb *msg_ctx)
+                                 size_t mem_size, struct json_parse_opts *opts)
 {
     struct state *st = &(struct state){
         .start = (char *)text, // json_err()
         .text = (char *)text,
         .mem_ptr = mem,
         .mem_end = (char *)mem + mem_size,
-        .msg = msg_ctx ? *msg_ctx : (struct json_msg_cb){0},
+        .opts = opts ? opts : &(struct json_parse_opts){0},
     };
 
+    if (st->opts->depth < 1)
+        st->opts->depth = 8;
+
+    st->opts->error = JSON_ERR_NONE;
+
     if (mem_size < MAX_ALIGN) {
-        json_err(st, "out of memory");
+        json_err_val(st, JSON_ERR_NOMEM, "out of memory");
         return NULL;
     }
 
@@ -413,10 +425,8 @@ static struct json_tok *do_parse(const char *text, bool copy, void *mem,
     if (!res)
         return NULL;
 
-    if (!parse_value(st, res, depth)) {
-        json_err(st, "character does not start a valid JSON token");
+    if (!parse_value(st, res, st->opts->depth))
         return NULL;
-    }
 
     // No trailing non-whitespace text allowed.
     skip_ws(st);
@@ -428,13 +438,13 @@ static struct json_tok *do_parse(const char *text, bool copy, void *mem,
 }
 
 struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
-                                        int depth, struct json_msg_cb *msg_ctx)
+                                        struct json_parse_opts *opts)
 {
-    return do_parse(text, false, mem, mem_size, depth, msg_ctx);
+    return do_parse(text, false, mem, mem_size, opts);
 }
 
 struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
-                            int depth, struct json_msg_cb *msg_ctx)
+                            struct json_parse_opts *opts)
 {
-    return do_parse(text, true, mem, mem_size, depth, msg_ctx);
+    return do_parse(text, true, mem, mem_size, opts);
 }
