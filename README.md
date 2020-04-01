@@ -17,6 +17,7 @@ Main features
 - Small, unintrusive, and complete.
 - Returns an easy to use AST.
 - No malloc(), works on a provided preallocated chunk of memory.
+- Constant C stack usage: no recursion, no alloca, no VLAs.
 - Suitable for embedded use. (You may need to provide implementations for some
   standard functions, see below.)
 

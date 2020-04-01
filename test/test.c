@@ -191,6 +191,7 @@ int main(void)
     parsegen_test("  ", "<error>");
     parsegen_test("", "<error>");
     parsegen_test("{", "<error>");
+    parsegen_test("[", "<error>");
     parsegen_test("\"\\uDBFFa", "<error>");
     parsegen_test("\"\\uDBFF\\uAFFF\"", "<error>");
     // Should fail. There are various extensions to JSON which allow them (and

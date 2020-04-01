@@ -74,8 +74,7 @@ struct json_parse_opts {
     // Maximum nesting of JSON elements allowed. The parser's depth value starts
     // out with 1. Every nested object or array adds 1 to it. If the value is
     // larger than the depth parameter provided here, an error is returned.
-    // depth<=0 sets a positive default value.
-    // The C stack depth used by the parser grows linearly with this depth.
+    // depth<=0 makes the depth (practically) limited by available memory.
     int depth;
 
     // msg_cb() is called with the given opaque field. loc is the byte
