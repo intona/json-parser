@@ -33,12 +33,23 @@ struct json_out {
     size_t buffer_size;
     bool error;
     bool first_entry;
+    void (*write)(void *ctx, const char *buf, size_t len);
+    void *write_ctx;
 };
 
+// Output to a fixed-size buffer.
 void json_out_init(struct json_out *out, char *buffer, size_t buffer_size);
 
-// Get the pointer to the output string (in practice, the buffer that was passed
-// in), or NULL if there was an error during writing.
+// Output via a callback. write() is called with write_ctx as cookie in the
+// first parameter, and a buffer that is _not_ necessarily \0 terminated,
+void json_out_init_cb(struct json_out *out,
+    void (*write)(void *ctx, const char *buf, size_t len), void *write_ctx);
+
+// Possibly flush still buffered data, perform error checks, return results.
+bool json_out_finish(struct json_out *out);
+
+// Call json_out_finish(), and return the pointer to the output string (in
+// practice, the buffer that was passed in), or NULL if the former failed.
 char *json_out_get_output(struct json_out *out);
 
 // For cosmetic purposes, or as terminator.

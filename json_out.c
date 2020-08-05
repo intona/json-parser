@@ -38,13 +38,32 @@ void json_out_init(struct json_out *out, char *buffer, size_t buffer_size)
         buffer[0] = '\0';
 }
 
+void json_out_init_cb(struct json_out *out,
+    void (*write)(void *ctx, const char *buf, size_t len), void *write_ctx)
+{
+    *out = (struct json_out){
+        .write = write,
+        .write_ctx = write_ctx,
+    };
+}
+
+bool json_out_finish(struct json_out *out)
+{
+    return out->error;
+}
+
 char *json_out_get_output(struct json_out *out)
 {
-    return out->error ? NULL : out->start;
+    return json_out_finish(out) ? NULL : out->start;
 }
 
 static void append_buf(struct json_out *out, const char *buf, size_t len)
 {
+    if (out->write) {
+        out->write(out->write_ctx, buf, len);
+        return;
+    }
+
     // (The +1 is for making it 0-terminated at the end of the function.)
     if (out->buffer_size < len + 1) {
         out->error = true;
@@ -69,20 +88,20 @@ void json_out_newline(struct json_out *out)
 FORMAT_STR(2, 3)
 static void append_f(struct json_out *out, const char *fmt, ...)
 {
+    char buf[64]; // enough for single decimals and floats
     int len;
 
     va_list va;
     va_start(va, fmt);
-    len = vsnprintf(out->buffer, out->buffer_size, fmt, va);
+    len = vsnprintf(buf, sizeof(buf), fmt, va);
     va_end(va);
 
-    if (len < 0 || out->buffer_size < (unsigned)len + 1) {
+    if (len < 0 || sizeof(buf) < (unsigned)len + 1) {
         out->error = true;
         return;
     }
 
-    out->buffer += len;
-    out->buffer_size -= len;
+    append_buf(out, buf, len);
 }
 
 void json_out_null(struct json_out *out)
