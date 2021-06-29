@@ -53,7 +53,7 @@ Hints for embedded use
   compiler, change MAX_ALIGN to 8 (or 1 if your target CPU supports fast
   unaligned accesses) and remove the asserts. Adapting to C89 will be harder.
 - json_out.c (not required by the parser) uses stdio's vsnprintf() to format
-  numbers. A sufficiently non-bloated libc for embedded use is here:
+  numbers. A sufficiently non-bloated printf for embedded use is here:
   https://github.com/mpaland/printf/
   (This does not correctly format floats as of this writing.)
 
