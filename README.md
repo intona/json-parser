@@ -39,7 +39,8 @@ Hints for embedded use
 - It uses floats (double C type) and strtod(). If floats are not available on
   the target architecture, you can replace all occurences of "double" with
   "int" or "long", and "strtod" with "strtol" (or use your own string to
-  integer conversion).
+  integer conversion). It's also possible to change the "double" type to "float"
+  in order to save memory (a lot is "wasted" due to internal fragmentation).
 - strtod() is very bloated on some embedded libcs. If you do not require correct
   float conversion, this simple strtod() function can be easily adapted:
   https://github.com/libass/libass/blob/master/libass/ass_strtod.c
@@ -48,7 +49,7 @@ Hints for embedded use
   removed entirely (the parser will then accept inf/nan).
 - In addition, it uses some simple string functions, which should not pose any
   trouble.
-- The only required C11 features that are not available in C99 is the use of the
+- The only required C11 features that are not available in C99 are the use of the
   _Alignof operator and the static_assert() statement. If you do not have a C11
   compiler, set MAX_ALIGN to the correct value (usually 8 or 4, or 1 if your
   target CPU supports fast unaligned accesses) and remove the asserts.
