@@ -153,6 +153,7 @@ static bool push_list_head(struct state *st, struct json_tok *tok)
         return false;
     }
 
+    // Use curlist_alloc for alignment; also needed to pop the entry correctly.
     struct curlist *cur = json_stack_alloc(st, sizeof(union curlist_alloc));
     if (!cur)
         return false;
@@ -214,8 +215,13 @@ static bool parse_lists(struct state *st)
                 REVERSE_ITEMS(struct json_tok, tok->u.array);
             }
 
-            st->top = cur->prev;
+            // Restore stack to what it was before the previous push_list_head()
+            // call (basically pop curlist off the stack). Between the new
+            // st->stack_ptr and st->top, the current list items for st->top are
+            // located.
             st->stack_ptr = (char *)cur + sizeof(union curlist_alloc);
+            // Continue parsing into the previous list (returning from recursion).
+            st->top = cur->prev;
 
             continue;
         }
