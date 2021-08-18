@@ -108,6 +108,7 @@ static void *json_stack_alloc(struct state *st, size_t obj_size)
 }
 
 static bool parse_value(struct state *st, struct json_tok *tok);
+static char *parse_str(struct state *st);
 
 static void skip_ws(struct state *st)
 {
@@ -218,8 +219,9 @@ static bool parse_lists(struct state *st)
                 return false;
             tok->u.object->count++;
 
-            struct json_tok tmp;
-            if (!parse_value(st, &tmp) || tmp.type != JSON_TYPE_STRING) {
+            skip_ws(st);
+            e->key = parse_str(st);
+            if (!e->key) {
                 json_err(st, "object member name expected (quoted string)");
                 return false;
             }
@@ -227,7 +229,6 @@ static bool parse_lists(struct state *st)
                 json_err(st, "':' after object member name expected");
                 return false;
             }
-            e->key = tmp.u.str;
 
             item_tok = &e->value;
         } else if (tok->type == JSON_TYPE_ARRAY) {
@@ -304,22 +305,26 @@ static char *encode_utf8(char *dst, uint32_t cp)
 // Terminating the string with \0 and resolving escapes is done in-place to
 // reduce memory usage. The string starts at st->text, and the unescaped string
 // is "appended" to this position in-place.
-static bool parse_str(struct state *st)
+static char *parse_str(struct state *st)
 {
-    char *dst = st->text;
+    if (st->text[0] != '"')
+        return NULL;
+    st->text += 1;
+    char *start = st->text;
+    char *dst = start;
     while (1) {
         unsigned char c = st->text[0];
         if (!c) {
             json_err(st, "closing '\"' missing in string literal");
-            return false;
+            return NULL;
         }
         st->text += 1;
         if (c == '"') {
             *dst = '\0';
-            return true;
+            return start;
         } else if (c <= 0x1F) {
             json_err(st, "unescaped control character in string literal");
-            return false;
+            return NULL;
         } else if (c == '\\') {
             c = st->text[0];
             if (c)
@@ -338,40 +343,40 @@ static bool parse_str(struct state *st)
                 // Numeric escapes, e.g. "\u005C"
                 int v = parse_numeric_escape(st);
                 if (v < 0)
-                    return false;
+                    return NULL;
                 uint32_t cp = v;
                 // Surrogate pairs for characters outside of the BMP.
                 if (cp >= 0xD800 && cp <= 0xDBFF) {
                     if (!skip_str(st, "\\u")) {
                         json_err(st, "missing low surrogate pair");
-                        return false;
+                        return NULL;
                     }
                     v = parse_numeric_escape(st);
                     if (v < 0)
-                        return false;
+                        return NULL;
                     if (v < 0xDC00 || v > 0xDFFF) {
                         json_err(st, "invalid low surrogate pair");
-                        return false;
+                        return NULL;
                     }
                     cp = ((cp & 0x3FF) << 10) + (v & 0x3FF) + 0x10000;
                 }
                 // What should \u0000 do? Just error out.
                 if (cp == 0) {
                     json_err(st, "0 byte escape rejected");
-                    return false;
+                    return NULL;
                 }
                 // Note: in-place encoding is still possible. In the worst case,
                 // we write 4 bytes, while the escape syntax uses 6 bytes.
                 dst = encode_utf8(dst, cp);
                 if (!dst) {
                     json_err(st, "invalid unicode escape");
-                    return false;
+                    return NULL;
                 }
                 continue;
             }
             default:
                 json_err(st, "unknown escape");
-                return false;
+                return NULL;
             }
         }
         *dst++ = c;
@@ -425,12 +430,10 @@ static bool parse_value(struct state *st, struct json_tok *tok)
         tok->type = c == '[' ? JSON_TYPE_ARRAY : JSON_TYPE_OBJECT;
         st->text += 1;
         return push_list_head(st, tok);
-    case '"': {
-        st->text += 1;
+    case '"':
         tok->type = JSON_TYPE_STRING;
-        tok->u.str = st->text;
-        return parse_str(st);
-    }
+        tok->u.str = parse_str(st);
+        return !!tok->u.str;
     default: ;
         // The only valid other thing could be a number.
         if (!parse_number(st, tok))
