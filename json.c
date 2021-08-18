@@ -42,24 +42,45 @@ struct curlist {
     struct curlist *prev;
 };
 
-// To keep the stack allocator simple: keep alignment when allocating curlist.
-union curlist_alloc {
+union common_align {
+    // Stack
     struct curlist a;
     struct json_tok b;
     struct json_object_entry c;
+    // Heap
+    struct json_tok d;
+    struct json_array e;
+    struct json_object f;
 };
 
-#define MAX_ALIGN (_Alignof(struct json_tok))
-// Stack allocation must not add additional padding (array/object parsing assumes
-// allocating is like appending to a C array), so they must be multiples of the
-// stack's inherent alignment. (Generally simplifies stack pointer management.)
-static_assert(!(sizeof(struct json_tok) & (MAX_ALIGN - 1)), "");
-static_assert(!(sizeof(union curlist_alloc) & (MAX_ALIGN - 1)), "");
-static_assert(!(sizeof(struct json_object_entry) & (MAX_ALIGN - 1)), "");
-// "Heap" allocations only need a common minimum alignment.
-static_assert(MAX_ALIGN >= _Alignof(struct json_tok), "");
-static_assert(MAX_ALIGN >= _Alignof(struct json_array), "");
-static_assert(MAX_ALIGN >= _Alignof(struct json_object), "");
+// Common alignment for all types that are allocated on the shadow stack or the
+// user heap.
+// If you want to modify this to remove C11 requirements: change it to the
+// required alignment, usually 8 or 4. Allocating a json_tok/json_object_entry
+// must not add extra padding due to MAX_ALIGN alignment.
+#define MAX_ALIGN (_Alignof(union common_align))
+
+// struct curlist needs special treatment, because it needs to be allocated on
+// the shadow stack along with types, whose alignment usually is larger. It only
+// needs to be a multiple of MAX_ALIGN; padding ensures this.
+union curlist_alloc {
+    struct curlist a;
+    // curlist size rounded up to a MAX_ALIGN multiple.
+    char pad[(sizeof(struct curlist) + MAX_ALIGN - 1) / MAX_ALIGN * MAX_ALIGN];
+};
+
+// Types allocated on the shadow stack must have sizes that are multiples of the
+// stack's inherent alignment (MAX_ALIGN). It simplifies allocation: to allocate
+// an object, it only needs to subtract the object size from the stack pointer,
+// without having to add additional padding to satisfy the type's alignment. The
+// parser also relies on this by assuming no additional stack realignment
+// happens (it can pop previously pushed data by adding the object size to the
+// stack pointer).
+// These asserts could fail on unusual platforms or if code modifications break
+// these assumptions. Failed asserts imply the parser would corrupt its memory.
+static_assert(!(sizeof(union curlist_alloc) % MAX_ALIGN), "");
+static_assert(!(sizeof(struct json_tok) % MAX_ALIGN), "");
+static_assert(!(sizeof(struct json_object_entry) % MAX_ALIGN), "");
 
 static void json_err_val(struct state *st, int err, const char *msg)
 {
