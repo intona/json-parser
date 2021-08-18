@@ -21,7 +21,7 @@ static void json_msg_cb(void *opaque, size_t loc, const char *msg)
 
 static bool run_test(const char *text, const char *expect,
                      int max_mem, int max_depth, bool test_limits,
-                     int cutoff_input)
+                     bool error_on_limits, int cutoff_input)
 {
     memset(tmp2, 0xDF, sizeof(tmp2));
     if (max_mem > sizeof(tmp2))
@@ -61,7 +61,7 @@ static bool run_test(const char *text, const char *expect,
     bool limits_exceeded = opts.error == JSON_ERR_NOMEM ||
                            opts.error == JSON_ERR_DEPTH;
 
-    if (test_limits && !tok && limits_exceeded)
+    if (error_on_limits && !tok && limits_exceeded)
         return false;
 
     if (test_limits && cutoff_input < len)
@@ -78,18 +78,19 @@ static bool run_test(const char *text, const char *expect,
     return true;
 }
 
-static void parsegen_test(const char *text, const char *expect)
+static void parsegen_test_full(const char *text, const char *expect,
+                               bool test_cutoff)
 {
     int mem = 4096;
     int depth = 100;
     int input = strlen(text);
 
-    run_test(text, expect, mem, depth, false, input);
+    run_test(text, expect, mem, depth, false, false, input);
 
     // Test max. stack depth that works.
     bool depth_ok = true;
     for (int n = depth; n >= 1; n--) {
-        bool ok = run_test(text, expect, mem, n, true, input);
+        bool ok = run_test(text, expect, mem, n, true, true, input);
         if (ok != depth_ok) {
             if (depth_ok) {
                 printf(" ... max depth: %d\n", n);
@@ -105,7 +106,7 @@ static void parsegen_test(const char *text, const char *expect)
     // Test max. memory size that works.
     bool mem_ok = true;
     for (int n = mem; n >= 0; n--) {
-        bool ok = run_test(text, expect, n, depth, true, input);
+        bool ok = run_test(text, expect, n, depth, true, true, input);
         if (ok != mem_ok) {
             if (mem_ok) {
                 printf(" ... max mem: %d\n", n);
@@ -118,16 +119,29 @@ static void parsegen_test(const char *text, const char *expect)
         }
     }
 
-    // Test cut off input. Only in certain cases.
-    if (text[0] == '[' || text[0] == '{' || text[0] == '"') {
+    // Test cut off input.
+    if (test_cutoff) {
         for (int n = input - 2; n >= 0; n--) {
-            bool ok = run_test(text, expect, mem, depth, true, n);
+            bool ok = run_test(text, expect, mem, depth, true, false, n);
             if (!ok) {
                 printf("oh no (cut off at %d)\n", n);
                 abort();
             }
         }
     }
+}
+
+static void parsegen_test(const char *text, const char *expect)
+{
+    parsegen_test_full(text, expect, true);
+}
+
+// Do not test removing characters from the end of the text (avoids test failing
+// if text is supposed to fail, but becomes valid by removing characters, but
+// also if removing characters does _not_ make parsing fail).
+static void parsegen_test_nocut(const char *text, const char *expect)
+{
+    parsegen_test_full(text, expect, false);
 }
 
 static void example(void)
@@ -156,20 +170,20 @@ static void example(void)
 int main(void)
 {
     example();
-    parsegen_test("  { }  ", "{}");
-    parsegen_test("  true ", "true");
-    parsegen_test("  false ", "false");
-    parsegen_test("  null ", "null");
-    parsegen_test(" 123 ", "123");
+    parsegen_test_nocut("  { }  ", "{}");
+    parsegen_test_nocut("  true ", "true");
+    parsegen_test_nocut("  false ", "false");
+    parsegen_test_nocut("  null ", "null");
+    parsegen_test_nocut(" 123 ", "123");
     parsegen_test("{\"field1\": \"test\", \"field2\" : 2}",
                   "{\"field1\":\"test\",\"field2\":2}");
     parsegen_test(" [ 3, 4, true, false ,null ] ", "[3,4,true,false,null]");
-    parsegen_test("\"he\\u003a\\t\\u001cll\\\\o \\\"there\"",
+    parsegen_test_nocut("\"he\\u003a\\t\\u001cll\\\\o \\\"there\"",
                   "\"he:\\t\\u001cll\\\\o \\\"there\"");
     parsegen_test("{\"field1\": [1, 2, 3, {\"f\": [4, 5, 6]}, "
-                  " {\"g\": [7, 8, 9, 10 ] }, 11], \"field2\" : 2}",
+                  " {\"g\": [7, 8, 9, 10,12 ] }, 11], \"field2\" : 2}",
                   "{\"field1\":[1,2,3,{\"f\":[4,5,6]},"
-                  "{\"g\":[7,8,9,10]},11],\"field2\":2}");
+                  "{\"g\":[7,8,9,10,12]},11],\"field2\":2}");
     // Unicode escapes (for UTF-16 surrogate parser and UTF-8 encoder).
     parsegen_test("\"\\uD801\\uDC37\"", "\"𐐷\"");
     parsegen_test("\"\\uD834\\uDD1E\"", "\"𝄞\"");
@@ -184,19 +198,32 @@ int main(void)
     parsegen_test("\"\\uD803\\uDE6D\"", "\"\xF0\x90\xB9\xAD\"");
     parsegen_test("\"\\uDBFF\\uDFFF\"", "\"\xF4\x8F\xBF\xBF\"");
     // Must fail.
-    parsegen_test("  truek", "<error>");
+    parsegen_test_nocut("  truek", "<error>");
+    parsegen_test_nocut("  true1", "<error>");
+    parsegen_test_nocut("  1true", "<error>");
     parsegen_test("  tru", "<error>");
     parsegen_test("  tr", "<error>");
     parsegen_test("  t", "<error>");
     parsegen_test("  ", "<error>");
     parsegen_test("", "<error>");
+    parsegen_test(" \t ", "<error>");
     parsegen_test("{", "<error>");
     parsegen_test("[", "<error>");
     parsegen_test("\"\\uDBFFa", "<error>");
     parsegen_test("\"\\uDBFF\\uAFFF\"", "<error>");
+    parsegen_test_nocut("1 2", "<error>");
+    parsegen_test("{4:5}", "<error>");
+    parsegen_test("{:5}", "<error>");
+    // Deeper than the hardcoded 100 max. nesting depth in parsegen_test().
+    parsegen_test("[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[["
+                  "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[["
+                  "1"
+                  "]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+                  "]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+                  "<error>");
     // Should fail. There are various extensions to JSON which allow them (and
     // we could support them), but they are not part of standard JSON.
-    parsegen_test("{field: hello}", "<error>");
+    parsegen_test("{field: 123}", "<error>");
     parsegen_test("[1,2,3,]", "<error>");
 
     printf("OK\n");
