@@ -141,6 +141,18 @@ static bool push_list_head(struct state *st, struct json_tok *tok)
     st->top = cur;
     st->idepth--;
 
+    if (tok->type == JSON_TYPE_OBJECT) {
+        tok->u.object = json_alloc(st, sizeof(*tok->u.object));
+        if (!tok->u.object)
+            return false;
+        *tok->u.object = (struct json_object){0};
+    } else if (tok->type == JSON_TYPE_ARRAY) {
+        tok->u.array = json_alloc(st, sizeof(*tok->u.array));
+        if (!tok->u.array)
+            return false;
+        *tok->u.array = (struct json_array){0};
+    }
+
     return true;
 }
 
@@ -172,29 +184,28 @@ static bool parse_lists(struct state *st)
             memmove(items, st->stack_ptr, items_size);
             st->mem_ptr += items_size;
 
-            st->top = cur->prev;
-            st->stack_ptr = (char *)cur + sizeof(union curlist_alloc);
-
             if (tok->type == JSON_TYPE_OBJECT) {
-                tok->u.object = json_alloc(st, sizeof(*tok->u.object));
-                if (!tok->u.object)
-                    return false;
                 tok->u.object->items = items;
-                tok->u.object->count = items_size / sizeof(tok->u.object->items[0]);
                 REVERSE_ITEMS(struct json_object_entry, tok->u.object);
             } else if (tok->type == JSON_TYPE_ARRAY) {
-                tok->u.array = json_alloc(st, sizeof(*tok->u.array));
-                if (!tok->u.array)
-                    return false;
                 tok->u.array->items = items;
-                tok->u.array->count = items_size / sizeof(tok->u.array->items[0]);
                 REVERSE_ITEMS(struct json_tok, tok->u.array);
             }
+
+            st->top = cur->prev;
+            st->stack_ptr = (char *)cur + sizeof(union curlist_alloc);
 
             continue;
         }
 
-        if (st->stack_ptr != (char *)cur && !skip_str(st, ",")) {
+        bool empty = true;
+        if (tok->type == JSON_TYPE_OBJECT) {
+            empty = !tok->u.object->count;
+        } else if (tok->type == JSON_TYPE_ARRAY) {
+            empty = !tok->u.array->count;
+        }
+
+        if (!empty && !skip_str(st, ",")) {
             json_err(st, "',' expected");
             return false;
         }
@@ -204,7 +215,8 @@ static bool parse_lists(struct state *st)
         if (tok->type == JSON_TYPE_OBJECT) {
             struct json_object_entry *e = json_stack_alloc(st, sizeof(*e));
             if (!e)
-                return NULL;
+                return false;
+            tok->u.object->count++;
 
             struct json_tok tmp;
             if (!parse_value(st, &tmp) || tmp.type != JSON_TYPE_STRING) {
@@ -220,10 +232,10 @@ static bool parse_lists(struct state *st)
             item_tok = &e->value;
         } else if (tok->type == JSON_TYPE_ARRAY) {
             item_tok = json_stack_alloc(st, sizeof(*item_tok));
+            if (!item_tok)
+                return false;
+            tok->u.array->count++;
         }
-
-        if (!item_tok)
-            return false;
 
         if (!parse_value(st, item_tok)) {
             json_err(st, "array/object value expected");
