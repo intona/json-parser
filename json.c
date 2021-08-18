@@ -74,6 +74,11 @@ static void json_err(struct state *st, const char *msg)
     json_err_val(st, JSON_ERR_SYNTAX, msg);
 }
 
+static void json_err_oom(struct state *st)
+{
+    json_err_val(st, JSON_ERR_NOMEM, "out of memory");
+}
+
 // Allocate memory of given size, with MAX_ALIGN alignment.
 static void *json_alloc(struct state *st, size_t obj_size)
 {
@@ -82,7 +87,7 @@ static void *json_alloc(struct state *st, size_t obj_size)
         obj_size += MAX_ALIGN - (obj_size & (MAX_ALIGN - 1));
 
     if (obj_size > st->stack_ptr - st->mem_ptr) {
-        json_err_val(st, JSON_ERR_NOMEM, "out of memory");
+        json_err_oom(st);
         return NULL;
     }
 
@@ -95,7 +100,7 @@ static void *json_alloc(struct state *st, size_t obj_size)
 static void *json_stack_alloc(struct state *st, size_t obj_size)
 {
     if (obj_size > st->stack_ptr - st->mem_ptr || (obj_size & (MAX_ALIGN - 1))) {
-        json_err_val(st, JSON_ERR_NOMEM, "out of memory");
+        json_err_oom(st);
         return NULL;
     }
     st->stack_ptr -= obj_size;
