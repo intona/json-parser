@@ -94,7 +94,7 @@ struct json_parse_opts {
 // Parse JSON and turn it into a tree of json_tok structs. All tokens are
 // allocated from the provided mem pointer. Returns the root token on success,
 // returns NULL on error (including if mem_size is too small).
-//  text: JSON source (mutated by parser, and returned tokens reference it!)
+//  text: JSON source
 //  mem: scratch memory (will be overwritten and referenced by returned tokens)
 //  mem_size: size of mem memory area in bytes that can be used
 //  opts: can be NULL
