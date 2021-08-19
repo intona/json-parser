@@ -44,4 +44,22 @@ struct json_array *json_get_array(struct json_tok *j, const char *name);
 struct json_object *json_get_object(struct json_tok *j, const char *name);
 struct json_tok *json_get(struct json_tok *j, const char *name);
 
+// Return the index of the field with the given name. If j is not an object, or
+// if name could not be found, return -1. This is O(n).
+ptrdiff_t json_object_find(struct json_tok *j, const char *name);
+
+// Return the array item at the given index. If j is not an array, or the index
+// is out of bounds, return NULL.
+struct json_tok *json_array_get(struct json_tok *j, size_t index);
+
+// C99 macros for constructing stack json_toks.
+#define JSON_MAKE_NULL()  (&(struct json_tok){.type = JSON_TYPE_NULL})
+#define JSON_MAKE_BOOL(v) (&(struct json_tok){.type = JSON_TYPE_BOOL,   .u.b = (v)})
+#define JSON_MAKE_STR(v)  (&(struct json_tok){.type = JSON_TYPE_STRING, .u.str = (v)})
+#define JSON_MAKE_NUM(v)  (&(struct json_tok){.type = JSON_TYPE_DOUBLE, .u.d = (v)})
+#define JSON_MAKE_OBJ()   (&(struct json_tok){.type = JSON_TYPE_OBJECT, \
+                            .u.object = &(struct json_object){0}})
+#define JSON_MAKE_ARR()   (&(struct json_tok){.type = JSON_TYPE_ARRAY, \
+                            .u.array = &(struct json_array){0}})
+
 #endif

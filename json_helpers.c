@@ -19,17 +19,25 @@
 
 #include "json_helpers.h"
 
+ptrdiff_t json_object_find(struct json_tok *j, const char *name)
+{
+    if (j && j->type == JSON_TYPE_OBJECT && name) {
+        for (size_t n = 0; n < j->u.object->count; n++) {
+            if (strcmp(j->u.object->items[n].key, name) == 0)
+                return n;
+        }
+    }
+    return -1;
+}
+
 struct json_tok *json_get(struct json_tok *j, const char *name)
 {
     if (!name)
         return j;
 
-    if (j && j->type == JSON_TYPE_OBJECT) {
-        for (size_t n = 0; n < j->u.object->count; n++) {
-            if (strcmp(j->u.object->items[n].key, name) == 0)
-                return &j->u.object->items[n].value;
-        }
-    }
+    ptrdiff_t idx = json_object_find(j, name);
+    if (idx >= 0)
+        return &j->u.object->items[idx].value;
 
     return NULL;
 }
@@ -69,4 +77,10 @@ struct json_object *json_get_object(struct json_tok *j, const char *name)
 {
     j = json_get(j, name);
     return j && j->type == JSON_TYPE_OBJECT ? j->u.object : NULL;
+}
+
+struct json_tok *json_array_get(struct json_tok *j, size_t index)
+{
+    struct json_array *arr = json_get_array(j, NULL);
+    return arr && index < arr->count ? &arr->items[index] : NULL;
 }
