@@ -25,12 +25,12 @@
 // parameter).
 //
 // If name is not NULL:
-//      If j is an object, look for the given field. If j is an object, the
-//      field is present in the object, and the field value has the correct
-//      type, return it. Otherwise, return the def parameter instead.
+//      If j is an object, look for the given field. If the field is present in
+//      the object, and the field value has the correct type, return it.
+//      Otherwise, return the def parameter.
 // If name is NULL:
-//      If j has the implied type, return its value. Otherwise, return the
-//      def parameter.
+//      If j has the implied type, return its value.
+//      Otherwise, return the def parameter.
 //
 // In all cases, a NULL j parameter is allowed and results in returning def.
 //
