@@ -22,7 +22,9 @@
 #include <stdint.h>
 
 enum json_type {
-    JSON_TYPE_INVALID,      // does not occur in valid json
+    // Note: JSON_TYPE_INVALID is guaranteed to be 0, so a 0-initialized
+    // json_tok is guaranteed to have type==JSON_TYPE_INVALID.
+    JSON_TYPE_INVALID = 0,  // does not occur in valid json
     JSON_TYPE_NULL,         // "null" (no value in json_tok.u)
     JSON_TYPE_BOOL,         // true/false
     JSON_TYPE_STRING,       // string (0-terminated, escapes resolved)
