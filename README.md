@@ -98,9 +98,10 @@ test/test.c is a simple test of the parser and some of the helpers.
 
 test/parser.c expects a filename as argument, and returns success or failure.
 On failure, it also prints the error. This is suitable for use with
-[JSONTestSuite][1]. (As of this writing, it passed all tests, except some
-SHOULD_HAVE_FAILEDs with number strictness, and 2 SHOULD_HAVE_PASSED where this
-parser rejects escapes resulting in strings with embedded zeros.)
+[JSONTestSuite](https://github.com/nst/JSONTestSuite). (As of this writing,
+it passed all tests, except some SHOULD_HAVE_FAILEDs with number strictness,
+and 2 SHOULD_HAVE_PASSED where this parser rejects escapes resulting in strings
+with embedded zeros.)
 
 Known deviations from standard JSON
 -----------------------------------
@@ -138,9 +139,9 @@ Incompatible API changes
 
 This lists incompatible API changes done starting 2022.
 
-2022.01.13:
+* 2022.01.13:
 
-    limit the parser depth to 64 by default, instead of practically unlimited
+    Limit the parser depth to 64 by default, instead of practically unlimited
     depth. The old behavior can be restored by setting json_parse_opts.depth
     to INT_MAX.
 
@@ -148,8 +149,3 @@ License
 -------
 
 ISC (permissive, similar to BSD and MIT)
-
-Links
------
-
-[1]: https://github.com/nst/JSONTestSuite
