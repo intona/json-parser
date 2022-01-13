@@ -86,14 +86,14 @@ int main(int argc, char **argv)
         if (fseek(f, 0, SEEK_END) < 0)
             goto error_file;
 
-        long size = ftell(f);
+        size = ftell(f);
         if (size < 0)
             goto error_file;
 
         if (fseek(f, 0, SEEK_SET) < 0)
             goto error_file;
 
-        void *data = calloc(1, size + 1);
+        data = calloc(1, size + 1);
         if (!data)
             goto error_size;
 
