@@ -129,6 +129,9 @@ TODO
   a JSON object key is missing or has the wrong type.)
 - There are some optimization opportunities, but which probably would increase
   code size. (Such as the array/object item reorder copy.)
+- Consider changing API by removing json_object, and replacing it with
+  json_array, whose items all are of type JSON_TYPE_OBJECT_ENTRY, which would
+  point to an allocated json_object_entry.
 
 Incompatible API changes
 ------------------------
