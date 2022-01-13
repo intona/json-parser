@@ -4,40 +4,12 @@
 #include <string.h>
 
 #include "json.h"
+#include "json_helpers_malloc.h"
+#include "json_out.h"
 
-static void dump_tok(struct json_tok *tok, int depth)
+static void do_write(void *ctx, const char *buf, size_t len)
 {
-    printf("%*s", depth, "");
-    switch (tok->type) {
-    case JSON_TYPE_NULL:
-        printf("null\n");
-        break;
-    case JSON_TYPE_BOOL:
-        printf("%s\n", tok->u.b ? "true" : "false");
-        break;
-    case JSON_TYPE_STRING:
-        printf("'%s'\n", tok->u.str);
-        break;
-    case JSON_TYPE_DOUBLE:
-        printf("%f\n", tok->u.d);
-        break;
-    case JSON_TYPE_ARRAY:
-        printf("[\n");
-        for (size_t n = 0; n < tok->u.array->count; n++)
-            dump_tok(&tok->u.array->items[n], depth + 2);
-        printf("%*s]\n", depth, "");
-        break;
-    case JSON_TYPE_OBJECT:
-        printf("{\n");
-        for (size_t n = 0; n < tok->u.object->count; n++) {
-            printf("%*s'%s':\n", depth, "", tok->u.object->items[n].key);
-            dump_tok(&tok->u.object->items[n].value, depth + 2);
-        }
-        printf("%*s}\n", depth, "");
-        break;
-    default:
-        printf("error\n");
-    }
+    fwrite(buf, len, 1, stdout);
 }
 
 static void json_msg_cb(void *opaque, size_t loc, const char *msg)
@@ -50,16 +22,25 @@ int main(int argc, char **argv)
     char *arg = NULL;
     bool is_file = true;
     bool dump = false;
+    bool use_malloc = false;
+    int indent_count = 3;
 
     for (int n = 1; n < argc; n++) {
         if (strcmp(argv[n], "--string") == 0) {
             is_file = false;
         } else if (strcmp(argv[n], "--dump") == 0) {
             dump = true;
+        } else if (strcmp(argv[n], "--malloc") == 0) {
+            use_malloc = true;
+        } else if (strncmp(argv[n], "--indent=", 9) == 0) {
+            indent_count = atoi(argv[n] + 9); // lazy!
         } else if (argv[n][0] == '-') {
             fprintf(stderr, "Invalid command line arguments.\n");
             fprintf(stderr, "   --string    Argument is a string to parse.\n");
             fprintf(stderr, "   --dump      Dump JSON tree.\n");
+            fprintf(stderr, "   --indent=N  Dump indentation (0 no indentation,\n");
+            fprintf(stderr, "               -1 disable pretty print, >0: num. spaces\n");
+            fprintf(stderr, "   --malloc    Use malloc().\n");
             fprintf(stderr, "   arg         File, or JSON string if --string.\n");
             return 2;
         } else {
@@ -104,22 +85,33 @@ int main(int argc, char **argv)
         data = arg;
     }
 
-    // Estimate "some" memory size to hold the result. Normally, you'd provide a
-    // fixed buffer size (embedded scenario), or modify the parser to use malloc
-    // (desktop scenario; heavier json parser libs might be preferable).
-    if (size > ((size_t)-1 - 64 * 1024) / 64)
-        goto error_size;
-    size_t memory_size = 64 * 1024 + size * 16; // unchecked overflow
-    void *memory = malloc(memory_size);
-    if (!memory)
-        goto error_size;
-
     struct json_parse_opts opts = {.depth = 1000, .msg_cb = json_msg_cb};
-    struct json_tok *tok = json_parse(data, memory, memory_size, &opts);
+
+    struct json_tok *tok;
+    if (use_malloc) {
+        tok = json_parse_malloc(data, &opts);
+    } else {
+        // Estimate "some" memory size to hold the result. Normally, you'd
+        // use a fixed buffer (embedded scenario), or use json_parse_malloc().
+        size_t memory_size = 64 * 1024 + size * 8; // unchecked overflow
+        void *memory = malloc(memory_size);
+        if (!memory)
+            goto error_size;
+        tok = json_parse(data, memory, memory_size, &opts);
+        // reminder that tok will point to memory
+    }
+
     if (tok) {
         printf("Success.\n");
-        if (dump)
-            dump_tok(tok, 0);
+        if (dump) {
+            struct json_out out;
+            json_out_init_cb(&out, do_write, NULL);
+            if (indent_count >= 0)
+                json_out_set_indent(&out, indent_count);
+            json_out_write(&out, tok);
+            json_out_finish(&out);
+            printf("\n");
+        }
         return 0;
     } else {
         fprintf(stderr, "Parsing failed.\n");
