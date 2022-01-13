@@ -35,6 +35,9 @@ struct json_out {
     bool first_entry;
     void (*write)(void *ctx, const char *buf, size_t len);
     void *write_ctx;
+    int depth;
+    bool enable_newlines;
+    int indent;
 };
 
 // Output to a fixed-size buffer.
@@ -84,5 +87,12 @@ void json_out_field_string(struct json_out *out, const char *key, const char *st
 
 // Write the token (potentially a sub-tree of JSON elements).
 void json_out_write(struct json_out *out, struct json_tok *root);
+
+// Pretty printing: enable line breaks after each array/object item.
+void json_out_enable_newlines(struct json_out *out);
+
+// Pretty printing: enable adding indent spaces for each array/object nesting.
+// This internally calls json_out_enable_newlines().
+void json_out_set_indent(struct json_out *out, int indent);
 
 #endif

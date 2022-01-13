@@ -168,16 +168,29 @@ void json_out_continue_string(struct json_out *out, const char *str)
     append_buf(out, str, cur - str);
 }
 
+static void maybe_newline(struct json_out *out)
+{
+    if (out->enable_newlines) {
+        json_out_newline(out);
+        if (out->indent)
+            append_f(out, "%*s", out->depth * out->indent, "");
+    }
+}
+
 void json_out_object_start(struct json_out *out)
 {
     append_str(out, "{");
     out->first_entry = true;
+    out->depth++;
+    maybe_newline(out);
 }
 
 void json_out_field_start(struct json_out *out, const char *key)
 {
-    if (!out->first_entry)
+    if (!out->first_entry) {
         append_str(out, ",");
+        maybe_newline(out);
+    }
     out->first_entry = false;
 
     json_out_string(out, key);
@@ -186,6 +199,8 @@ void json_out_field_start(struct json_out *out, const char *key)
 
 void json_out_object_end(struct json_out *out)
 {
+    out->depth--;
+    maybe_newline(out);
     append_str(out, "}");
     out->first_entry = false;
 }
@@ -194,17 +209,23 @@ void json_out_array_start(struct json_out *out)
 {
     append_str(out, "[");
     out->first_entry = true;
+    out->depth++;
+    maybe_newline(out);
 }
 
 void json_out_array_entry_start(struct json_out *out)
 {
-    if (!out->first_entry)
+    if (!out->first_entry) {
         append_str(out, ",");
+        maybe_newline(out);
+    }
     out->first_entry = false;
 }
 
 void json_out_array_end(struct json_out *out)
 {
+    out->depth--;
+    maybe_newline(out);
     append_str(out, "]");
     out->first_entry = false;
 }
@@ -283,4 +304,15 @@ void json_out_write(struct json_out *out, struct json_tok *root)
     default:
         append_str(out, "<error>");
     }
+}
+
+void json_out_enable_newlines(struct json_out *out)
+{
+    out->enable_newlines = true;
+}
+
+void json_out_set_indent(struct json_out *out, int indent)
+{
+    json_out_enable_newlines(out);
+    out->indent = indent;
 }
