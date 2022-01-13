@@ -90,6 +90,10 @@ struct json_parse_opts {
     // Passed as first parameter to msg_cb(), unused otherwise.
     void *msg_cb_opaque;
 
+    // If set to true, accept various syntax that is not covered by standard
+    // JSON. If false (the default), such extensions are rejected as errors.
+    bool enable_extensions;
+
     // This is always set by json_parse() and related functions. If multiple
     // errors happen, this is set to the first one that was reported.
     enum json_error error;

@@ -20,6 +20,7 @@ static void json_msg_cb(void *opaque, size_t loc, const char *msg)
 static bool oom_enable;
 static size_t oom_left;
 static bool oom_hit;
+static bool enable_extensions;
 
 static void *mrealloc(void *opaque, void *p, size_t sz)
 {
@@ -82,6 +83,7 @@ static bool run_test_(const char *text, const char *expect,
         .depth = max_depth,
         .msg_cb = test_limits ? NULL : json_msg_cb,
         .mrealloc = use_mrealloc ? mrealloc : NULL,
+        .enable_extensions = enable_extensions,
     };
 
     struct json_tok *tok = NULL;
@@ -217,6 +219,15 @@ static void parsegen_test_full(const char *text, const char *expect,
 static void parsegen_test(const char *text, const char *expect)
 {
     parsegen_test_full(text, expect, true);
+}
+
+// Expect failure if extensions are disabled, otherwise like parsegen_test().
+static void parsegen_test_ext(const char *text, const char *expect)
+{
+    enable_extensions = true;
+    parsegen_test(text, expect);
+    enable_extensions = false;
+    parsegen_test(text, "<error>");
 }
 
 // Do not test removing characters from the end of the text (avoids test failing
@@ -418,6 +429,12 @@ int main(void)
     // we could support them), but they are not part of standard JSON.
     parsegen_test("{field: 123}", "<error>");
     parsegen_test("[1,2,3,]", "<error>");
+    // Supported extension: // comments until the end of a line
+    parsegen_test_ext("[1,2,//3,4//9\n//6\n\n5,6]", "[1,2,5,6]");
+    parsegen_test_ext("//nuu\n{//dadada\n\"f\"//dududu\n://nuii\n3}", "{\"f\":3}");
+    enable_extensions = true;
+    parsegen_test_nocut("123//uhhhh", "123");
+    enable_extensions = false;
 
     test_mrealloc_oom("{\"field1\": [1, 2, 3, {\"f\": [4, 5, 6]}, "
                       " {\"g\": [7, 8, 9, 10,12 ] }, 11], \"field2\" : 2}",

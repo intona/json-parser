@@ -187,7 +187,16 @@ static char *parse_str(struct state *st);
 
 static void skip_ws(struct state *st)
 {
-    st->text += strspn(st->text, " \t\r\n");
+    for (;;) {
+        st->text += strspn(st->text, " \t\r\n");
+        if (st->opts->enable_extensions &&
+            st->text[0] == '/' && st->text[1] == '/')
+        {
+            st->text += strcspn(st->text, "\n");
+            continue;
+        }
+        break;
+    }
 }
 
 static bool skip_str(struct state *st, const char *str)
