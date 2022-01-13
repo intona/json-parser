@@ -55,6 +55,10 @@ bool json_out_finish(struct json_out *out);
 // practice, the buffer that was passed in), or NULL if the former failed.
 char *json_out_get_output(struct json_out *out);
 
+// Append a raw string to the output (for example, splicing in pre-formatted
+// JSON data).
+void json_out_raw(struct json_out *out, const char *s, size_t s_size);
+
 // For cosmetic purposes, or as terminator.
 void json_out_newline(struct json_out *out);
 

@@ -75,6 +75,11 @@ static void append_buf(struct json_out *out, const char *buf, size_t len)
     out->buffer[0] = '\0';
 }
 
+void json_out_raw(struct json_out *out, const char *s, size_t s_size)
+{
+    append_buf(out, s, s_size); // just an alias
+}
+
 static void append_str(struct json_out *out, const char *str)
 {
     append_buf(out, str, strlen(str));
