@@ -9,29 +9,68 @@
 
 #include "json.h"
 #include "json_helpers.h"
+#include "json_helpers_malloc.h"
 #include "json_out.h"
-
-static unsigned char tmp1[4096];
-static unsigned char tmp2[4096];
 
 static void json_msg_cb(void *opaque, size_t loc, const char *msg)
 {
     printf("json parser (at %d): %s\n", (int)loc, msg);
 }
 
-static bool run_test(const char *text, const char *expect,
-                     int max_mem, int max_depth, bool test_limits,
-                     bool error_on_limits, int cutoff_input)
+static bool oom_enable;
+static size_t oom_left;
+static bool oom_hit;
+
+static void *mrealloc(void *opaque, void *p, size_t sz)
 {
-    memset(tmp2, 0xDF, sizeof(tmp2));
-    if (max_mem > sizeof(tmp2))
-        max_mem = sizeof(tmp2);
+    if (!sz) {
+        free(p);
+        return NULL;
+    }
+    if (oom_enable) {
+        if (oom_hit) {
+            // Not truly a bug, but unexpected.
+            printf("repeated mrealloc after oom\n");
+            abort();
+        }
+        if (sz > oom_left) {
+            oom_hit = true;
+            return NULL;
+        }
+        oom_left -= sz;
+    }
+    return realloc(p, sz);
+}
+
+#define BUF_SZ 4096
+
+static bool run_test_(const char *text, const char *expect,
+                      int max_mem, int max_depth, bool test_limits,
+                      bool error_on_limits, int cutoff_input, bool use_mrealloc,
+                      bool use_mrealloc_for_real)
+{
+    char tmp1_static[BUF_SZ];
+    char tmp2_static[BUF_SZ];
+    char *tmp1 = tmp1_static;
+    char *tmp2 = tmp2_static;
+
+    // Using mrealloc => ensure returned json_tok tree does not point to it by
+    // freeing it and letting address sanitizer do the checks.
+    if (use_mrealloc) {
+        tmp1 = malloc(BUF_SZ);
+        tmp2 = malloc(BUF_SZ);
+        assert(tmp1 && tmp2);
+    }
+
+    memset(tmp2, 0xDF, BUF_SZ);
+    if (max_mem > BUF_SZ)
+        max_mem = BUF_SZ;
 
     if (!test_limits)
         printf("parsing: %s\n", text);
 
     size_t len = strlen(text);
-    if (len + 1 > sizeof(tmp1))
+    if (len + 1 > BUF_SZ)
         abort();
     memcpy(tmp1, text, len + 1);
 
@@ -42,13 +81,27 @@ static bool run_test(const char *text, const char *expect,
     struct json_parse_opts opts = {
         .depth = max_depth,
         .msg_cb = test_limits ? NULL : json_msg_cb,
+        .mrealloc = use_mrealloc ? mrealloc : NULL,
     };
 
-    struct json_tok *tok =
-        json_parse_destructive(tmp1, tmp2, max_mem, &opts);
+    struct json_tok *tok = NULL;
 
-    for (int n = max_mem; n < sizeof(tmp2); n++)
-        assert(tmp2[n] == 0xDF);
+    if (use_mrealloc_for_real) {
+        // The test runner has two mrealloc paths, because json_parse_malloc()
+        // is too opaque and does not let you test some of the limits.
+        tok = json_parse_malloc(text, &opts);
+    } else {
+        tok = json_parse_destructive(tmp1, tmp2, max_mem, &opts);
+    }
+
+    for (int n = max_mem; n < BUF_SZ; n++)
+        assert(tmp2[n] == (char)0xDF);
+
+    if (use_mrealloc) {
+        free(tmp1);
+        free(tmp2);
+        json_free(opts.mrealloc_waste);
+    }
 
     unsigned char tmp[4096];
     struct json_out dump;
@@ -58,14 +111,19 @@ static bool run_test(const char *text, const char *expect,
     if (!test_limits)
         printf(" =>      %s\n", out ? out : "<error?>");
 
+    bool success = !!tok;
+
+    if (use_mrealloc || use_mrealloc_for_real)
+        json_free(tok);
+
     bool limits_exceeded = opts.error == JSON_ERR_NOMEM ||
                            opts.error == JSON_ERR_DEPTH;
 
-    if (error_on_limits && !tok && limits_exceeded)
+    if (error_on_limits && !success && limits_exceeded)
         return false;
 
     if (test_limits && cutoff_input < len)
-        return !tok;
+        return !success;
 
     if (strcmp(expect, out)) {
         if (test_limits)
@@ -76,6 +134,31 @@ static bool run_test(const char *text, const char *expect,
     }
 
     return true;
+}
+
+static bool run_test(const char *text, const char *expect,
+                     int max_mem, int max_depth, bool test_limits,
+                     bool error_on_limits, int cutoff_input)
+{
+    bool r = run_test_(text, expect, max_mem, max_depth, test_limits,
+                       error_on_limits, cutoff_input, false, false);
+
+    // Test dynamic case; set test_limits=true because it basically means
+    // not printing anything normally.
+    bool r2 = run_test_(text, expect, max_mem, max_depth, true,
+                        error_on_limits, cutoff_input, true, false);
+
+    // Of course the results can be different if limits are applied (different
+    // amounts of static memory area are used).
+    if (!test_limits) {
+        if (r != r2) {
+            printf("Inconsistent behavior with static vs. malloc: %d %d\n", r, r2);
+            printf("Test failed!\n");
+            abort();
+        }
+    }
+
+    return r;
 }
 
 static void parsegen_test_full(const char *text, const char *expect,
@@ -144,6 +227,47 @@ static void parsegen_test_nocut(const char *text, const char *expect)
     parsegen_test_full(text, expect, false);
 }
 
+static void test_mrealloc_oom(const char *text, const char *expect)
+{
+    // Step 1: test how much memory it needs.
+    oom_enable = true;
+    oom_hit = false;
+    oom_left = (size_t)-1;
+
+    assert(run_test_(text, expect, 1024, 16, true, true, INT_MAX, true, false));
+
+    // Step 2: test by reducing the memory budget by 1 byte each iteration.
+    size_t needed = (size_t)-1 - oom_left;
+    size_t cur = needed + 1;
+    bool failed = false;
+    while (cur) {
+        cur -= 1;
+        oom_enable = true;
+        oom_hit = false;
+        oom_left = cur;
+        bool r = run_test_(text, expect, 1024, 16, true, true, INT_MAX,
+                           true, false);
+        if (r) {
+            if (oom_hit) {
+                printf("should not have hit OOM\n");
+                abort();
+            }
+            if (failed) {
+                printf("inconsistent OOM behavior\n");
+                abort();
+            }
+        } else {
+            if (!oom_hit) {
+                printf("should have hit OOM\n");
+                abort();
+            }
+            if (!failed)
+                printf("expected failure on %zu/%zu bytes\n", cur, needed);
+            failed = true;
+        }
+    }
+}
+
 static void example(void)
 {
     // Working memory for the parser. Must be large enough for any expected
@@ -165,6 +289,72 @@ static void example(void)
     }
 
     assert(sum == 12 + 34 + 56);
+}
+
+static void expect_tree(struct json_tok *tree, const char *expect)
+{
+    char *s = json_to_string(tree);
+    if (strcmp(expect, s)) {
+        printf("expected: <%s>\ngot: <%s>\n", expect, s);
+        abort();
+    }
+    free(s);
+}
+
+static void test_malloc_helpers(void)
+{
+    struct json_tok *root = json_copy(JSON_MAKE_OBJ());
+    expect_tree(root, "{}");
+    assert(json_set_int(root, "num", 123));
+    assert(json_set_string(root, "str", "hello"));
+    char *s = strdup("aloha");
+    assert(s);
+    assert(json_set_string_nocopy(root, "str2", s));
+    struct json_tok *arr = json_set_array(root, "array");
+    assert(arr);
+    expect_tree(root, "{\"num\":123,\"str\":\"hello\",\"str2\":\"aloha\",\"array\":[]}");
+    struct json_tok *copy = json_copy(root);
+    assert(copy);
+    expect_tree(copy, "{\"num\":123,\"str\":\"hello\",\"str2\":\"aloha\",\"array\":[]}");
+    json_free(copy);
+    assert(json_object_remove(root, "str"));
+    assert(json_object_remove(root, "num"));
+    assert(json_object_remove(root, "str2"));
+    assert(!json_object_remove(root, "blubb"));
+    expect_tree(root, "{\"array\":[]}");
+    assert(json_array_append(arr, JSON_MAKE_NUM(56)));
+    assert(json_array_append(arr, JSON_MAKE_NULL()));
+    assert(json_array_append(arr, JSON_MAKE_STR("abc")));
+    assert(json_array_append(arr, JSON_MAKE_BOOL(true)));
+    expect_tree(root, "{\"array\":[56,null,\"abc\",true]}");
+    assert(json_array_insert(arr, 2, JSON_MAKE_STR("brrr")));
+    assert(json_array_insert(arr, 3, JSON_MAKE_OBJ()));
+    expect_tree(root, "{\"array\":[56,null,\"brrr\",{},\"abc\",true]}");
+    assert(!json_array_remove(arr, 6));
+    assert(json_array_remove(arr, 2));
+    expect_tree(root, "{\"array\":[56,null,{},\"abc\",true]}");
+    assert(json_array_remove(arr, 4));
+    expect_tree(root, "{\"array\":[56,null,{},\"abc\"]}");
+    assert(json_array_remove(arr, 0));
+    assert(json_array_remove(arr, 0));
+    assert(json_array_remove(arr, 1));
+    expect_tree(root, "{\"array\":[{}]}");
+    assert(json_array_set(arr, 0, JSON_MAKE_BOOL(false)));
+    expect_tree(root, "{\"array\":[false]}");
+    assert(json_array_remove(arr, 0));
+    expect_tree(root, "{\"array\":[]}");
+    assert(json_set_int(root, "array", 3000));
+    expect_tree(root, "{\"array\":3000}");
+    struct json_tok *sub1 = json_get_or_add_typed(root, "array", JSON_TYPE_DOUBLE);
+    assert(sub1);
+    expect_tree(sub1, "3000");
+    struct json_tok *sub2 = json_get_or_add_typed(root, "array", JSON_TYPE_ARRAY);
+    assert(sub2);
+    expect_tree(sub2, "[]");
+    struct json_tok *sub3 = json_get_or_add_typed(root, "mooh", JSON_TYPE_ARRAY);
+    json_array_append(sub3, JSON_MAKE_NUM(1));
+    expect_tree(root, "{\"array\":[],\"mooh\":[1]}");
+    json_free(root);
 }
 
 int main(void)
@@ -228,6 +418,21 @@ int main(void)
     // we could support them), but they are not part of standard JSON.
     parsegen_test("{field: 123}", "<error>");
     parsegen_test("[1,2,3,]", "<error>");
+
+    test_mrealloc_oom("{\"field1\": [1, 2, 3, {\"f\": [4, 5, 6]}, "
+                      " {\"g\": [7, 8, 9, 10,12 ] }, 11], \"field2\" : 2}",
+                      "{\"field1\":[1,2,3,{\"f\":[4,5,6]},"
+                      "{\"g\":[7,8,9,10,12]},11],\"field2\":2}");
+
+    // The stuff above never actually tests json_parse_malloc() itself.
+    if (!run_test_("{\"a\":123,\"bc\":[]}", "{\"a\":123,\"bc\":[]}",
+                   0, 0, false, false, INT_MAX, false, true))
+    {
+        printf("mrealloc failed\n");
+        abort();
+    }
+
+    test_malloc_helpers();
 
     printf("OK\n");
     return 0;

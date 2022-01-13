@@ -70,6 +70,7 @@ enum json_error {
     JSON_ERR_SYNTAX,        // failed due to a syntax error
     JSON_ERR_NOMEM,         // failed due to provided memory not being enough
     JSON_ERR_DEPTH,         // failed due to json_parse_opts.depth exceeded
+    JSON_ERR_INVAL,         // some kind of API usage error, or internal error
 };
 
 struct json_parse_opts {
@@ -92,6 +93,40 @@ struct json_parse_opts {
     // This is always set by json_parse() and related functions. If multiple
     // errors happen, this is set to the first one that was reported.
     enum json_error error;
+
+    // Optional memory allocation function. If set to non-NULL, the JSON AST
+    // returned by the parser is allocated using this function, instead of the
+    // memory provided to the json_parse group of functions.
+    // Please use json_parse_malloc() instead, which is a wrapper around this,
+    // and uses system malloc() while taking care of the messy details.
+    //
+    // For sz!=0, mrealloc(_, p, sz) must behave exactly as standard C
+    // realloc(p, sz) (though errno does not need to be set).
+    // For sz==0, mrealloc(_, p, 0) must behave like standard C free(p). (Note
+    // that realloc(p, 0) is implementation defined, and does not necessarily
+    // free the memory! The even less portable variant mrealloc(_, NULL, 0) is
+    // also called and should do nothing.) Return NULL in this case.
+    // The following changes for the json_parse*() API:
+    //  - struct json_tok values and all memory they reference are allocated
+    //    with mrealloc()
+    //  - json_parse_destructive() may still clobber the source text (despite
+    //    the fact that all returned string json_toks are mrealloc()-allocated)
+    //  - the mem/mem_size memory is still used for the internal parsing stack,
+    //    and the parsing function still has constant C stack usage
+    // Arrays/objects are over-allocated to power of 2 boundaries, which is due
+    // to pre-allocation during parsing, and trades higher internal
+    // fragmentation for speed.
+    void *(*mrealloc)(void *opaque, void *p, size_t sz);
+
+    // Passed as first parameter to mrealloc(), unused otherwise.
+    void *mrealloc_opaque;
+
+    // If parsing fails with mrealloc set, the result must be free'd again. Then
+    // the parser sets this field to the (possibly incomplete) JSON tree that
+    // needs to be freed.  It needs to be done by the caller for various funny
+    // reasons.
+    // json_parse_malloc() does this automatically.
+    struct json_tok *mrealloc_waste;
 };
 
 // Default maximum depth for json_parse().
@@ -113,6 +148,7 @@ struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
 // reasons and to save copying the input text to the provided memory buffer for
 // internal reasons. String fields in the returned json_tok tree will point into
 // text buffer.
+// Setting opts->mrealloc modifies this behavior, see struct json_parse_opts.
 struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
                                         struct json_parse_opts *opts);
 

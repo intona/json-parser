@@ -20,6 +20,7 @@ Main features
 - Constant C stack usage: no recursion, no alloca, no VLAs.
 - Suitable for embedded use. (You may need to provide implementations for some
   standard functions, see below.)
+- Optional malloc() support for complex uses (including non-embedded).
 
 How to use
 ----------
@@ -32,6 +33,10 @@ The optional json_out.h/json_out.c files are trivial helpers to write JSON data.
 
 The optional json_helpers.h/json_helpers.c provide trivial helpers to traverse
 the data structure the parser returns.
+
+The optional json_helpers_malloc.h/json_helpers_malloc.c provide helpers that
+use malloc() instead of a static buffer, including functions to manipulate
+json_tok trees allocated with malloc.
 
 Hints for embedded use
 ----------------------
@@ -58,6 +63,8 @@ Hints for embedded use
   numbers. A sufficiently non-bloated printf for embedded use is here:
   https://github.com/mpaland/printf/
   (This does not correctly format floats as of this writing.)
+- json_helpers_malloc.c (also optional) was not written with embedded memory
+  constrained targets in mind.
 
 Design choices
 --------------
@@ -74,6 +81,13 @@ then performs destructive parsing on it.
 Theoretical portability is somewhat compromised by tight alignment requirements
 for some types (used with the shadow stack/heap). This is for the sake of saving
 a few bytes of memory and some code, but shouldn't matter in the real world.
+
+An option to make the parser use malloc() was added later. To reduce code
+duplication, json.c was made to handle both code paths (with and without malloc).
+To avoid the malloc() dependency, and due to the author's aversion to #if/#ifdef,
+it was decided to use a callback instead of a compile time define. The wrapper
+in json_helpers_malloc.h hides this and other weird details. Unlike json_parse(),
+these functions use recursion.
 
 Test programs
 -------------
