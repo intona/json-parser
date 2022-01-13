@@ -82,7 +82,7 @@ static void parsegen_test_full(const char *text, const char *expect,
                                bool test_cutoff)
 {
     int mem = 4096;
-    int depth = 100;
+    int depth = 10;
     int input = strlen(text);
 
     run_test(text, expect, mem, depth, false, false, input);
@@ -214,13 +214,16 @@ int main(void)
     parsegen_test_nocut("1 2", "<error>");
     parsegen_test("{4:5}", "<error>");
     parsegen_test("{:5}", "<error>");
-    // Deeper than the hardcoded 100 max. nesting depth in parsegen_test().
-    parsegen_test("[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[["
-                  "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[["
-                  "1"
-                  "]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
-                  "]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
-                  "<error>");
+    // Deeper than the hardcoded 10 max. nesting depth in parsegen_test().
+    parsegen_test("[[[[[[[[[[1]]]]]]]]]]", "<error>");
+    // One level less.
+    parsegen_test("[[[[[[[[[1]]]]]]]]]", "[[[[[[[[[1]]]]]]]]]");
+    // More array items than depth.
+    parsegen_test("[[[[[[[[[1,2,3,4,5,6,7,8,9,10,11]]]]]]]]]",
+                  "[[[[[[[[[1,2,3,4,5,6,7,8,9,10,11]]]]]]]]]");
+    // More array items than depth, ascending again at one point.
+    parsegen_test("[[[[[[[[[1,2,3,4,5,6,7,8,9,10,11]],[12,13,14,15,16,17,18,19,20]]]]]]]]",
+                  "[[[[[[[[[1,2,3,4,5,6,7,8,9,10,11]],[12,13,14,15,16,17,18,19,20]]]]]]]]");
     // Should fail. There are various extensions to JSON which allow them (and
     // we could support them), but they are not part of standard JSON.
     parsegen_test("{field: 123}", "<error>");

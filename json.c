@@ -222,6 +222,7 @@ static bool parse_lists(struct state *st)
             st->stack_ptr = (char *)cur + sizeof(union curlist_alloc);
             // Continue parsing into the previous list (returning from recursion).
             st->top = cur->prev;
+            st->idepth++;
 
             continue;
         }
