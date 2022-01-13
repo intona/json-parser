@@ -76,7 +76,8 @@ struct json_parse_opts {
     // Maximum nesting of JSON elements allowed. The parser's depth value starts
     // out with 1. Every nested object or array adds 1 to it. If the value is
     // larger than the depth parameter provided here, an error is returned.
-    // depth<=0 makes the depth (practically) limited by available memory.
+    // depth<=0 sets the depth to JSON_DEFAULT_PARSE_DEPTH.
+    // depth=INT_MAX sets the maximum allowed depth.
     int depth;
 
     // msg_cb() is called with the given opaque field. loc is the byte
@@ -92,6 +93,9 @@ struct json_parse_opts {
     // errors happen, this is set to the first one that was reported.
     enum json_error error;
 };
+
+// Default maximum depth for json_parse().
+#define JSON_DEFAULT_PARSE_DEPTH 64
 
 // Parse JSON and turn it into a tree of json_tok structs. All tokens are
 // allocated from the provided mem pointer. Returns the root token on success,

@@ -484,7 +484,8 @@ static struct json_tok *do_parse(const char *text, bool copy, void *mem,
         .opts = opts ? opts : &(struct json_parse_opts){0},
     };
 
-    st->idepth = st->opts->depth > 0 ? st->opts->depth - 1 : INT_MAX;
+    st->idepth =
+        (st->opts->depth > 0 ? st->opts->depth : JSON_DEFAULT_PARSE_DEPTH) - 1;
 
     st->opts->error = JSON_ERR_NONE;
 

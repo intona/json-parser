@@ -116,6 +116,17 @@ TODO
 - There are some optimization opportunities, but which probably would increase
   code size. (Such as the array/object item reorder copy.)
 
+Incompatible API changes
+------------------------
+
+This lists incompatible API changes done starting 2022.
+
+2022.01.13:
+
+    limit the parser depth to 64 by default, instead of practically unlimited
+    depth. The old behavior can be restored by setting json_parse_opts.depth
+    to INT_MAX.
+
 License
 -------
 
