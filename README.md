@@ -119,6 +119,18 @@ Known deviations from standard JSON
   uses C strings, which cannot represent strings with embedded zeros. (Also
   consider section 9 in RFC 8259.)
 
+Extensions
+----------
+
+If json_parse_opts.enable_extensions is set to true, the parser accepts the
+following extensions, which are not part by standard JSON, and which are
+normally rejected as errors:
+
+- Comments starting with "//" are recognized. Everything after "//" is ignored
+  and skipped until the next new line character (or the end of the input).
+- Objects and arrays can end with a trailing ",". It is ignored and has no
+  effect.
+
 TODO
 ----
 
