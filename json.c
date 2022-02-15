@@ -259,7 +259,9 @@ static bool parse_lists(struct state *st)
         struct curlist *cur = st->top;
         struct json_tok *tok = cur->tok;
 
-        if (skip_str(st, tok->type == JSON_TYPE_OBJECT ? "}" : "]")) {
+        char *endsym = tok->type == JSON_TYPE_OBJECT ? "}" : "]";
+
+        if (skip_str(st, endsym)) {
             if (!st->opts->mrealloc) {
                 // At the end of the parsing loop, all items will have been "pushed"
                 // to the stack between st->stack_ptr and cur (in reverse order).
@@ -299,9 +301,17 @@ static bool parse_lists(struct state *st)
             empty = !tok->u.array->count;
         }
 
-        if (!empty && !skip_str(st, ",")) {
-            json_err(st, "',' expected");
-            return false;
+        if (!empty) {
+            if (!skip_str(st, ",")) {
+                json_err(st, "',' expected");
+                return false;
+            }
+
+            if (st->opts->enable_extensions) {
+                skip_ws(st);
+                if (st->text[0] == endsym[0])
+                    continue; // let it see and process endsym
+            }
         }
 
         struct json_tok *item_tok = NULL;

@@ -432,6 +432,14 @@ int main(void)
     // Supported extension: // comments until the end of a line
     parsegen_test_ext("[1,2,//3,4//9\n//6\n\n5,6]", "[1,2,5,6]");
     parsegen_test_ext("//nuu\n{//dadada\n\"f\"//dududu\n://nuii\n3}", "{\"f\":3}");
+    // Supported extension: trailing ',' in arrays/objects
+    parsegen_test_ext("[1,2,]", "[1,2]");
+    parsegen_test_ext("[1 , 2  ,  ]", "[1,2]");
+    parsegen_test_ext("[1,]", "[1]");
+    parsegen_test_ext("[1,2,,]", "<error>");
+    parsegen_test_ext("[1,2,,3]", "<error>");
+    parsegen_test_ext("[,]", "<error>");
+    parsegen_test_ext("{\"a\":1,}", "{\"a\":1}");
     enable_extensions = true;
     parsegen_test_nocut("123//uhhhh", "123");
     enable_extensions = false;
