@@ -70,29 +70,29 @@ static void json_err_oom(struct state *st)
     json_err_val(st, JSON_ERR_NOMEM, "out of memory");
 }
 
-static void *json_stack_alloc(struct state *st, size_t obj_size, size_t align)
+static void *json_stack_alloc(struct state *st, size_t size, size_t align)
 {
     assert(IS_POW_2(align));
-    obj_size = (obj_size + (align - 1)) & ~(align - 1);
-    if (obj_size > st->mem_ptr - st->stack_ptr) {
+    size = (size + (align - 1)) & ~(align - 1);
+    if (size > st->mem_ptr - st->stack_ptr) {
         json_err_oom(st);
         return NULL;
     }
     void *res = st->stack_ptr;
     assert(!((uintptr_t)res & (align - 1)));
-    st->stack_ptr += obj_size;
+    st->stack_ptr += size;
     return res;
 }
 
 // Available in malloc-mode only. Wraps mrealloc().
-static void *json_mrealloc(struct state *st, void *p, size_t sz)
+static void *json_mrealloc(struct state *st, void *p, size_t size)
 {
-    if (!st->opts->mrealloc || (!p && !sz))
+    if (!st->opts->mrealloc || (!p && !size))
         return NULL;
-    void *res = st->opts->mrealloc(st->opts->mrealloc_opaque, p, sz);
-    if (sz) {
+    void *res = st->opts->mrealloc(st->opts->mrealloc_opaque, p, size);
+    if (size) {
         if (res) {
-            memset(res, 0, sz); // makes error handling less of a PITA
+            memset(res, 0, size); // makes error handling less of a PITA
         } else {
             json_err_oom(st);
         }
@@ -100,22 +100,22 @@ static void *json_mrealloc(struct state *st, void *p, size_t sz)
     return res;
 }
 
-// Allocate memory of given size, with heap_align alignment (and obj_size!=0).
-static void *json_alloc(struct state *st, size_t obj_size)
+// Allocate memory of given size, with heap_align alignment (and size!=0).
+static void *json_alloc(struct state *st, size_t size)
 {
     size_t alm = _Alignof(union heap_align) - 1;
 
     if (st->opts->mrealloc)
-        return json_mrealloc(st, NULL, obj_size);
+        return json_mrealloc(st, NULL, size);
 
-    size_t disalign = (((uintptr_t)st->mem_ptr & alm) - (obj_size & alm)) & alm;
+    size_t disalign = (((uintptr_t)st->mem_ptr & alm) - (size & alm)) & alm;
     size_t free = st->mem_ptr - st->stack_ptr;
-    if (obj_size > free || obj_size + disalign > free || !obj_size) {
+    if (size > free || size + disalign > free || !size) {
         json_err_oom(st);
         return NULL;
     }
 
-    st->mem_ptr = st->mem_ptr - (obj_size + disalign);
+    st->mem_ptr = st->mem_ptr - (size + disalign);
     assert(!((uintptr_t)st->mem_ptr & alm));
     return st->mem_ptr;
 }
@@ -286,24 +286,24 @@ static bool parse_lists(struct state *st)
         struct json_tok *item_tok = NULL;
 
         if (tok->type == JSON_TYPE_OBJECT) {
+            struct json_object *obj = tok->u.object;
             struct json_object_entry *e;
             if (st->opts->mrealloc) {
-                void *new = append_array(st, tok->u.object->items,
-                                         tok->u.object->count,
-                                         sizeof(tok->u.object->items[0]));
+                void *new = append_array(st, obj->items, obj->count,
+                                         sizeof(obj->items[0]));
                 if (!new)
                     return false;
-                tok->u.object->items = new;
-                e = &tok->u.object->items[tok->u.object->count];
+                obj->items = new;
+                e = &obj->items[obj->count];
             } else {
                 e = json_stack_alloc(st, sizeof(*e), _Alignof(*e));
                 if (!e)
                     return false;
-                if (!tok->u.object->count)
-                    tok->u.object->items = e;
+                if (!obj->count)
+                    obj->items = e;
             }
             *e = (struct json_object_entry){0};
-            tok->u.object->count++;
+            obj->count++;
 
             skip_ws(st);
             e->key = parse_str(st);
@@ -318,24 +318,24 @@ static bool parse_lists(struct state *st)
 
             item_tok = &e->value;
         } else if (tok->type == JSON_TYPE_ARRAY) {
+            struct json_array *arr = tok->u.array;
             if (st->opts->mrealloc) {
-                void *new = append_array(st, tok->u.array->items,
-                                         tok->u.array->count,
-                                         sizeof(tok->u.array->items[0]));
+                void *new = append_array(st, arr->items, arr->count,
+                                         sizeof(arr->items[0]));
                 if (!new)
                     return false;
-                tok->u.array->items = new;
-                item_tok = &tok->u.array->items[tok->u.array->count];
+                arr->items = new;
+                item_tok = &arr->items[arr->count];
             } else {
                 item_tok = json_stack_alloc(st, sizeof(*item_tok),
                                             _Alignof(*item_tok));
                 if (!item_tok)
                     return false;
-                if (!tok->u.array->count)
-                    tok->u.array->items = item_tok;
+                if (!arr->count)
+                    arr->items = item_tok;
             }
             *item_tok = (struct json_tok){0};
-            tok->u.array->count++;
+            arr->count++;
         }
 
         if (!parse_value(st, item_tok)) {
@@ -547,12 +547,12 @@ static bool parse_value(struct state *st, struct json_tok *tok)
     return false;
 }
 
-static struct json_tok *do_parse(const char *text, bool copy, void *mem,
-                                 size_t mem_size, struct json_parse_opts *opts)
+static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
+                                 struct json_parse_opts *opts, bool copy)
 {
     struct state *st = &(struct state){
-        .start = (char *)text, // json_err()
-        .text = (char *)text,
+        .start = text,
+        .text = text,
         .stack_ptr = mem,
         .mem_end = (char *)mem + mem_size,
         .opts = opts ? opts : &(struct json_parse_opts){0},
@@ -597,11 +597,11 @@ done:
 struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
                                         struct json_parse_opts *opts)
 {
-    return do_parse(text, false, mem, mem_size, opts);
+    return do_parse(text, mem, mem_size, opts, false);
 }
 
 struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
                             struct json_parse_opts *opts)
 {
-    return do_parse(text, true, mem, mem_size, opts);
+    return do_parse((char *)text, mem, mem_size, opts, true);
 }
