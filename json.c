@@ -217,134 +217,142 @@ static bool push_list_head(struct json_state *st, struct json_tok *tok)
     return true;
 }
 
+static bool parse_list_item(struct json_state *st)
+{
+    struct curlist *cur = st->top;
+    struct json_tok *tok = cur->tok;
+
+    char *endsym = tok->type == JSON_TYPE_OBJECT ? "}" : "]";
+
+    if (skip_str(st, endsym)) {
+        // Restore stack to before the previous push_list_head().
+        st->stack_ptr = cur->prev_stack_ptr;
+        // Continue parsing into the previous list (returning from recursion).
+        st->top = cur->prev_top;
+        st->idepth++;
+
+        if (!st->opts->mrealloc) {
+            // At the end of the parsing loop, all items will have been
+            // "pushed" to the stack. Consistent json_stack_alloc() use
+            // ensures the items are placed in memory like a C array.
+
+            void *items = NULL;
+            size_t sz = 0;
+            if (tok->type == JSON_TYPE_OBJECT) {
+                items = tok->u.object->items;
+                sz = tok->u.object->count * sizeof(tok->u.object->items[0]);
+            } else if (tok->type == JSON_TYPE_ARRAY) {
+                items = tok->u.array->items;
+                sz = tok->u.array->count * sizeof(tok->u.array->items[0]);
+            }
+
+            void *nitems = NULL;
+            if (sz) {
+                nitems = json_alloc(st, sz);
+                if (!nitems)
+                    return false;
+                memmove(nitems, items, sz); // may overlap
+            }
+
+            if (tok->type == JSON_TYPE_OBJECT) {
+                tok->u.object->items = nitems;
+            } else if (tok->type == JSON_TYPE_ARRAY) {
+                tok->u.array->items = nitems;
+            }
+        }
+
+        return true;
+    }
+
+    bool empty = true;
+    if (tok->type == JSON_TYPE_OBJECT) {
+        empty = !tok->u.object->count;
+    } else if (tok->type == JSON_TYPE_ARRAY) {
+        empty = !tok->u.array->count;
+    }
+
+    if (!empty) {
+        if (!skip_str(st, ",")) {
+            json_err(st, "',' expected");
+            return false;
+        }
+
+        if (st->opts->enable_extensions) {
+            skip_ws(st);
+            if (st->text[0] == endsym[0])
+                return true; // let it see and process endsym
+        }
+    }
+
+    struct json_tok *item_tok = NULL;
+
+    if (tok->type == JSON_TYPE_OBJECT) {
+        struct json_object *obj = tok->u.object;
+        struct json_object_entry *e;
+        if (st->opts->mrealloc) {
+            void *new = append_array(st, obj->items, obj->count,
+                                     sizeof(obj->items[0]));
+            if (!new)
+                return false;
+            obj->items = new;
+            e = &obj->items[obj->count];
+        } else {
+            e = json_stack_alloc(st, sizeof(*e), _Alignof(*e));
+            if (!e)
+                return false;
+            if (!obj->count)
+                obj->items = e;
+        }
+        *e = (struct json_object_entry){0};
+        obj->count++;
+
+        skip_ws(st);
+        e->key = parse_str(st);
+        if (!e->key) {
+            json_err(st, "object member name expected (quoted string)");
+            return false;
+        }
+        if (!skip_str(st, ":")) {
+            json_err(st, "':' after object member name expected");
+            return false;
+        }
+
+        item_tok = &e->value;
+    } else if (tok->type == JSON_TYPE_ARRAY) {
+        struct json_array *arr = tok->u.array;
+        if (st->opts->mrealloc) {
+            void *new = append_array(st, arr->items, arr->count,
+                                     sizeof(arr->items[0]));
+            if (!new)
+                return false;
+            arr->items = new;
+            item_tok = &arr->items[arr->count];
+        } else {
+            item_tok = json_stack_alloc(st, sizeof(*item_tok),
+                                        _Alignof(*item_tok));
+            if (!item_tok)
+                return false;
+            if (!arr->count)
+                arr->items = item_tok;
+        }
+        *item_tok = (struct json_tok){0};
+        arr->count++;
+    }
+
+    if (!parse_value(st, item_tok)) {
+        json_err(st, "array/object value expected");
+        return false;
+    }
+
+    return true;
+}
+
 // Parse JSON_TYPE_OBJECT or JSON_TYPE_ARRAY into tok.
 static bool parse_lists(struct json_state *st)
 {
     while (st->top) {
-        struct curlist *cur = st->top;
-        struct json_tok *tok = cur->tok;
-
-        char *endsym = tok->type == JSON_TYPE_OBJECT ? "}" : "]";
-
-        if (skip_str(st, endsym)) {
-            // Restore stack to before the previous push_list_head().
-            st->stack_ptr = cur->prev_stack_ptr;
-            // Continue parsing into the previous list (returning from recursion).
-            st->top = cur->prev_top;
-            st->idepth++;
-
-            if (!st->opts->mrealloc) {
-                // At the end of the parsing loop, all items will have been
-                // "pushed" to the stack. Consistent json_stack_alloc() use
-                // ensures the items are placed in memory like a C array.
-
-                void *items = NULL;
-                size_t sz = 0;
-                if (tok->type == JSON_TYPE_OBJECT) {
-                    items = tok->u.object->items;
-                    sz = tok->u.object->count * sizeof(tok->u.object->items[0]);
-                } else if (tok->type == JSON_TYPE_ARRAY) {
-                    items = tok->u.array->items;
-                    sz = tok->u.array->count * sizeof(tok->u.array->items[0]);
-                }
-
-                void *nitems = NULL;
-                if (sz) {
-                    nitems = json_alloc(st, sz);
-                    if (!nitems)
-                        return false;
-                    memmove(nitems, items, sz); // may overlap
-                }
-
-                if (tok->type == JSON_TYPE_OBJECT) {
-                    tok->u.object->items = nitems;
-                } else if (tok->type == JSON_TYPE_ARRAY) {
-                    tok->u.array->items = nitems;
-                }
-            }
-
-            continue;
-        }
-
-        bool empty = true;
-        if (tok->type == JSON_TYPE_OBJECT) {
-            empty = !tok->u.object->count;
-        } else if (tok->type == JSON_TYPE_ARRAY) {
-            empty = !tok->u.array->count;
-        }
-
-        if (!empty) {
-            if (!skip_str(st, ",")) {
-                json_err(st, "',' expected");
-                return false;
-            }
-
-            if (st->opts->enable_extensions) {
-                skip_ws(st);
-                if (st->text[0] == endsym[0])
-                    continue; // let it see and process endsym
-            }
-        }
-
-        struct json_tok *item_tok = NULL;
-
-        if (tok->type == JSON_TYPE_OBJECT) {
-            struct json_object *obj = tok->u.object;
-            struct json_object_entry *e;
-            if (st->opts->mrealloc) {
-                void *new = append_array(st, obj->items, obj->count,
-                                         sizeof(obj->items[0]));
-                if (!new)
-                    return false;
-                obj->items = new;
-                e = &obj->items[obj->count];
-            } else {
-                e = json_stack_alloc(st, sizeof(*e), _Alignof(*e));
-                if (!e)
-                    return false;
-                if (!obj->count)
-                    obj->items = e;
-            }
-            *e = (struct json_object_entry){0};
-            obj->count++;
-
-            skip_ws(st);
-            e->key = parse_str(st);
-            if (!e->key) {
-                json_err(st, "object member name expected (quoted string)");
-                return false;
-            }
-            if (!skip_str(st, ":")) {
-                json_err(st, "':' after object member name expected");
-                return false;
-            }
-
-            item_tok = &e->value;
-        } else if (tok->type == JSON_TYPE_ARRAY) {
-            struct json_array *arr = tok->u.array;
-            if (st->opts->mrealloc) {
-                void *new = append_array(st, arr->items, arr->count,
-                                         sizeof(arr->items[0]));
-                if (!new)
-                    return false;
-                arr->items = new;
-                item_tok = &arr->items[arr->count];
-            } else {
-                item_tok = json_stack_alloc(st, sizeof(*item_tok),
-                                            _Alignof(*item_tok));
-                if (!item_tok)
-                    return false;
-                if (!arr->count)
-                    arr->items = item_tok;
-            }
-            *item_tok = (struct json_tok){0};
-            arr->count++;
-        }
-
-        if (!parse_value(st, item_tok)) {
-            json_err(st, "array/object value expected");
+        if (!parse_list_item(st))
             return false;
-        }
     }
 
     return true;
