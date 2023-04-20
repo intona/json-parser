@@ -31,6 +31,8 @@ struct json_state {
     char *text;
     char *mem_ptr;          // offset for allocations
     char *stack_ptr;        // offset for stack
+    char *stack_start;
+    bool top_empty;
     bool destructive;
     int idepth;             // inverse nesting depth
     struct curlist *top;    // top-most list element (NULL if none)
@@ -39,8 +41,8 @@ struct json_state {
 
 struct curlist {
     struct json_tok *tok;
-    struct curlist *prev_top;
-    void *prev_stack_ptr;
+    size_t prev_offset : (sizeof(size_t) * CHAR_BIT - 1);
+    bool is_object : 1;
 };
 
 union heap_align {
@@ -189,14 +191,13 @@ static bool push_list_head(struct json_state *st, struct json_tok *tok)
         return false;
     }
 
-    void *stack_ptr = st->stack_ptr;
     struct curlist *cur = json_stack_alloc(st, sizeof(*cur), _Alignof(*cur));
     if (!cur)
         return false;
 
     cur->tok = tok;
-    cur->prev_top = st->top;
-    cur->prev_stack_ptr = stack_ptr;
+    cur->prev_offset = st->top ? (char *)cur - (char *)st->top : 0;
+    cur->is_object = tok->type == JSON_TYPE_OBJECT;
 
     st->top = cur;
     st->idepth--;
@@ -213,6 +214,8 @@ static bool push_list_head(struct json_state *st, struct json_tok *tok)
         *tok->u.array = (struct json_array){0};
     }
 
+    st->top_empty = true;
+
     return true;
 }
 
@@ -220,21 +223,42 @@ static bool push_list_head(struct json_state *st, struct json_tok *tok)
 static bool parse_list_next(struct json_state *st)
 {
     struct curlist *cur = st->top;
-    struct json_tok *tok = cur->tok;
 
-    char *endsym = tok->type == JSON_TYPE_OBJECT ? "}" : "]";
+    char *endsym = cur->is_object ? "}" : "]";
 
     if (skip_str(st, endsym)) {
-        // Restore stack to before the previous push_list_head().
-        st->stack_ptr = cur->prev_stack_ptr;
         // Continue parsing into the previous list (returning from recursion).
-        st->top = cur->prev_top;
+        st->top = (struct curlist *)
+                    (cur->prev_offset ? (char *)cur - cur->prev_offset : NULL);
         st->idepth++;
+        st->top_empty = false;
+
+        // Restore stack to before the previous push_list_head(). This can be
+        // right after the st->top item, but if the previous list has pushed
+        // items on the stack, it has to point at the end of the last item.
+        st->stack_ptr = st->top ? (char *)(st->top + 1) : st->stack_start;
 
         if (!st->opts->mrealloc) {
+            // Restore stack if previous list had items pushed on it.
+            if (st->top) {
+                struct json_tok *tok = st->top->tok;
+                void *items = NULL;
+                size_t sz = 0;
+                if (tok->type == JSON_TYPE_OBJECT) {
+                    items = tok->u.object->items;
+                    sz = tok->u.object->count * sizeof(tok->u.object->items[0]);
+                } else if (tok->type == JSON_TYPE_ARRAY) {
+                    items = tok->u.array->items;
+                    sz = tok->u.array->count * sizeof(tok->u.array->items[0]);
+                }
+                if (items && sz)
+                    st->stack_ptr = (char *)items + sz;
+            }
+
             // At the end of the parsing loop, all items will have been
             // "pushed" to the stack. Consistent json_stack_alloc() use
             // ensures the items are placed in memory like a C array.
+            struct json_tok *tok = cur->tok;
 
             void *items = NULL;
             size_t sz = 0;
@@ -264,14 +288,7 @@ static bool parse_list_next(struct json_state *st)
         return false;
     }
 
-    bool empty = true;
-    if (tok->type == JSON_TYPE_OBJECT) {
-        empty = !tok->u.object->count;
-    } else if (tok->type == JSON_TYPE_ARRAY) {
-        empty = !tok->u.array->count;
-    }
-
-    if (!empty) {
+    if (!st->top_empty) {
         if (!skip_str(st, ",")) {
             json_err(st, "',' expected");
             return false;
@@ -285,6 +302,8 @@ static bool parse_list_next(struct json_state *st)
                 return parse_list_next(st);
         }
     }
+
+    st->top_empty = false;
 
     return true;
 }
@@ -663,6 +682,7 @@ static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
     }
 
     st->mem_ptr = st->stack_ptr + mem_size;
+    st->stack_start = st->stack_ptr;
 
     res = json_alloc(st, sizeof(*res));
     if (!res)
