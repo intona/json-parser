@@ -56,8 +56,8 @@ Hints for embedded use
   trouble.
 - The only required C11 features that are not available in C99 are the use of the
   _Alignof operator and the static_assert() statement. If you do not have a C11
-  compiler, set MAX_ALIGN to the correct value (usually 8 or 4, or 1 if your
-  target CPU supports fast unaligned accesses) and remove the asserts.
+  compiler, replace _Alignof uses with the correct values (usually 8 or 4, or 1
+  if your target CPU supports fast unaligned accesses) and remove the asserts.
   Adapting to C89 will be harder.
 - json_out.c (not required by the parser) uses stdio's vsnprintf() to format
   numbers. A sufficiently non-bloated printf for embedded use is here:
@@ -77,10 +77,6 @@ it writes to the memory pointed to by the text argument). This is an attempt to
 save memory. Parsed string values do not need to be allocated from the provided
 memory region. The less tricky json_parse() simply copies the full input, and
 then performs destructive parsing on it.
-
-Theoretical portability is somewhat compromised by tight alignment requirements
-for some types (used with the shadow stack/heap). This is for the sake of saving
-a few bytes of memory and some code, but shouldn't matter in the real world.
 
 An option to make the parser use malloc() was added later. To reduce code
 duplication, json.c was made to handle both code paths (with and without malloc).

@@ -39,48 +39,16 @@ struct state {
 
 struct curlist {
     struct json_tok *tok;
-    struct curlist *prev;
+    struct curlist *prev_top;
+    void *prev_stack_ptr;
 };
 
-union common_align {
-    // Stack
-    struct curlist a;
-    struct json_tok b;
-    struct json_object_entry c;
-    // Heap
-    struct json_tok d;
-    struct json_array e;
-    struct json_object f;
+union heap_align {
+    struct json_object_entry oe;
+    struct json_tok t;
+    struct json_array a;
+    struct json_object o;
 };
-
-// Common alignment for all types that are allocated on the shadow stack or the
-// user heap.
-// If you want to modify this to remove C11 requirements: change it to the
-// required alignment, usually 8 or 4. Allocating a json_tok/json_object_entry
-// must not add extra padding due to MAX_ALIGN alignment.
-#define MAX_ALIGN (_Alignof(union common_align))
-
-// struct curlist needs special treatment, because it needs to be allocated on
-// the shadow stack along with types, whose alignment usually is larger. It only
-// needs to be a multiple of MAX_ALIGN; padding ensures this.
-union curlist_alloc {
-    struct curlist a;
-    // curlist size rounded up to a MAX_ALIGN multiple.
-    char pad[(sizeof(struct curlist) + MAX_ALIGN - 1) / MAX_ALIGN * MAX_ALIGN];
-};
-
-// Types allocated on the shadow stack must have sizes that are multiples of the
-// stack's inherent alignment (MAX_ALIGN). It simplifies allocation: to allocate
-// an object, it only needs to subtract the object size from the stack pointer,
-// without having to add additional padding to satisfy the type's alignment. The
-// parser also relies on this by assuming no additional stack realignment
-// happens (it can pop previously pushed data by adding the object size to the
-// stack pointer).
-// These asserts could fail on unusual platforms or if code modifications break
-// these assumptions. Failed asserts imply the parser would corrupt its memory.
-static_assert(!(sizeof(union curlist_alloc) % MAX_ALIGN), "");
-static_assert(!(sizeof(struct json_tok) % MAX_ALIGN), "");
-static_assert(!(sizeof(struct json_object_entry) % MAX_ALIGN), "");
 
 #define IS_POW_2(x) ((x) > 0 && !((x) & (x - 1)))
 
@@ -102,15 +70,18 @@ static void json_err_oom(struct state *st)
     json_err_val(st, JSON_ERR_NOMEM, "out of memory");
 }
 
-// Allocate stack memory of given size. obj_size must be a multiple of MAX_ALIGN.
-static void *json_stack_alloc(struct state *st, size_t obj_size)
+static void *json_stack_alloc(struct state *st, size_t obj_size, size_t align)
 {
-    if (obj_size > st->stack_ptr - st->mem_ptr || (obj_size & (MAX_ALIGN - 1))) {
+    assert(IS_POW_2(align));
+    obj_size = (obj_size + (align - 1)) & ~(align - 1);
+    if (obj_size > st->mem_ptr - st->stack_ptr) {
         json_err_oom(st);
         return NULL;
     }
-    st->stack_ptr -= obj_size;
-    return st->stack_ptr;
+    void *res = st->stack_ptr;
+    assert(!((uintptr_t)res & (align - 1)));
+    st->stack_ptr += obj_size;
+    return res;
 }
 
 // Available in malloc-mode only. Wraps mrealloc().
@@ -129,24 +100,24 @@ static void *json_mrealloc(struct state *st, void *p, size_t sz)
     return res;
 }
 
-// Allocate memory of given size, with MAX_ALIGN alignment (and obj_size!=0).
+// Allocate memory of given size, with heap_align alignment (and obj_size!=0).
 static void *json_alloc(struct state *st, size_t obj_size)
 {
+    size_t alm = _Alignof(union heap_align) - 1;
+
     if (st->opts->mrealloc)
         return json_mrealloc(st, NULL, obj_size);
 
-    // Ensure _next_ allocation will remain aligned.
-    if ((obj_size & (MAX_ALIGN - 1)) && obj_size < ((size_t)-1) - MAX_ALIGN)
-        obj_size += MAX_ALIGN - (obj_size & (MAX_ALIGN - 1));
-
-    if (obj_size > st->stack_ptr - st->mem_ptr || !obj_size) {
+    size_t disalign = (((uintptr_t)st->mem_ptr & alm) - (obj_size & alm)) & alm;
+    size_t free = st->mem_ptr - st->stack_ptr;
+    if (obj_size > free || obj_size + disalign > free || !obj_size) {
         json_err_oom(st);
         return NULL;
     }
 
-    void *res = st->mem_ptr;
-    st->mem_ptr += obj_size;
-    return res;
+    st->mem_ptr = st->mem_ptr - (obj_size + disalign);
+    assert(!((uintptr_t)st->mem_ptr & alm));
+    return st->mem_ptr;
 }
 
 static void *json_alloc_dup(struct state *st, void *ptr, size_t size)
@@ -216,13 +187,14 @@ static bool push_list_head(struct state *st, struct json_tok *tok)
         return false;
     }
 
-    // Use curlist_alloc for alignment; also needed to pop the entry correctly.
-    struct curlist *cur = json_stack_alloc(st, sizeof(union curlist_alloc));
+    void *stack_ptr = st->stack_ptr;
+    struct curlist *cur = json_stack_alloc(st, sizeof(*cur), _Alignof(*cur));
     if (!cur)
         return false;
 
     cur->tok = tok;
-    cur->prev = st->top;
+    cur->prev_top = st->top;
+    cur->prev_stack_ptr = stack_ptr;
 
     st->top = cur;
     st->idepth--;
@@ -242,16 +214,6 @@ static bool push_list_head(struct state *st, struct json_tok *tok)
     return true;
 }
 
-#define REVERSE_ITEMS(ITEM_T, f) do {               \
-    ITEM_T *arr_ = (f)->items;                      \
-    size_t count_ = (f)->count;                     \
-    for (size_t n_ = 0; n_ < count_ / 2; n_++) {    \
-        ITEM_T tmp = arr_[n_];                      \
-        arr_[n_] = arr_[count_ - 1 - n_];           \
-        arr_[count_ - 1 - n_] = tmp;                \
-    }                                               \
-} while (0)
-
 // Parse JSON_TYPE_OBJECT or JSON_TYPE_ARRAY into tok.
 static bool parse_lists(struct state *st)
 {
@@ -262,34 +224,41 @@ static bool parse_lists(struct state *st)
         char *endsym = tok->type == JSON_TYPE_OBJECT ? "}" : "]";
 
         if (skip_str(st, endsym)) {
+            // Restore stack to before the previous push_list_head().
+            st->stack_ptr = cur->prev_stack_ptr;
+            // Continue parsing into the previous list (returning from recursion).
+            st->top = cur->prev_top;
+            st->idepth++;
+
             if (!st->opts->mrealloc) {
-                // At the end of the parsing loop, all items will have been "pushed"
-                // to the stack between st->stack_ptr and cur (in reverse order).
-                // Move the items on the stack to the heap, and remove the stack.
-                // (This always works because everything is already correctly
-                // aligned.)
-                size_t items_size = (char *)cur - st->stack_ptr;
-                void *items = st->mem_ptr;
-                memmove(items, st->stack_ptr, items_size);
-                st->mem_ptr += items_size;
+                // At the end of the parsing loop, all items will have been
+                // "pushed" to the stack. Consistent json_stack_alloc() use
+                // ensures the items are placed in memory like a C array.
+
+                void *items = NULL;
+                size_t sz = 0;
+                if (tok->type == JSON_TYPE_OBJECT) {
+                    items = tok->u.object->items;
+                    sz = tok->u.object->count * sizeof(tok->u.object->items[0]);
+                } else if (tok->type == JSON_TYPE_ARRAY) {
+                    items = tok->u.array->items;
+                    sz = tok->u.array->count * sizeof(tok->u.array->items[0]);
+                }
+
+                void *nitems = NULL;
+                if (sz) {
+                    nitems = json_alloc(st, sz);
+                    if (!nitems)
+                        return false;
+                    memmove(nitems, items, sz); // may overlap
+                }
 
                 if (tok->type == JSON_TYPE_OBJECT) {
-                    tok->u.object->items = items;
-                    REVERSE_ITEMS(struct json_object_entry, tok->u.object);
+                    tok->u.object->items = nitems;
                 } else if (tok->type == JSON_TYPE_ARRAY) {
-                    tok->u.array->items = items;
-                    REVERSE_ITEMS(struct json_tok, tok->u.array);
+                    tok->u.array->items = nitems;
                 }
             }
-
-            // Restore stack to what it was before the previous push_list_head()
-            // call (basically pop curlist off the stack). Between the new
-            // st->stack_ptr and st->top, the current list items for st->top are
-            // located.
-            st->stack_ptr = (char *)cur + sizeof(union curlist_alloc);
-            // Continue parsing into the previous list (returning from recursion).
-            st->top = cur->prev;
-            st->idepth++;
 
             continue;
         }
@@ -327,9 +296,11 @@ static bool parse_lists(struct state *st)
                 tok->u.object->items = new;
                 e = &tok->u.object->items[tok->u.object->count];
             } else {
-                e = json_stack_alloc(st, sizeof(*e));
+                e = json_stack_alloc(st, sizeof(*e), _Alignof(*e));
                 if (!e)
                     return false;
+                if (!tok->u.object->count)
+                    tok->u.object->items = e;
             }
             *e = (struct json_object_entry){0};
             tok->u.object->count++;
@@ -356,9 +327,12 @@ static bool parse_lists(struct state *st)
                 tok->u.array->items = new;
                 item_tok = &tok->u.array->items[tok->u.array->count];
             } else {
-                item_tok = json_stack_alloc(st, sizeof(*item_tok));
+                item_tok = json_stack_alloc(st, sizeof(*item_tok),
+                                            _Alignof(*item_tok));
                 if (!item_tok)
                     return false;
+                if (!tok->u.array->count)
+                    tok->u.array->items = item_tok;
             }
             *item_tok = (struct json_tok){0};
             tok->u.array->count++;
@@ -579,7 +553,7 @@ static struct json_tok *do_parse(const char *text, bool copy, void *mem,
     struct state *st = &(struct state){
         .start = (char *)text, // json_err()
         .text = (char *)text,
-        .mem_ptr = mem,
+        .stack_ptr = mem,
         .mem_end = (char *)mem + mem_size,
         .opts = opts ? opts : &(struct json_parse_opts){0},
     };
@@ -588,17 +562,7 @@ static struct json_tok *do_parse(const char *text, bool copy, void *mem,
         (st->opts->depth > 0 ? st->opts->depth : JSON_DEFAULT_PARSE_DEPTH) - 1;
 
     st->opts->error = JSON_ERR_NONE;
-
-    if (mem_size < MAX_ALIGN) {
-        json_err_val(st, JSON_ERR_NOMEM, "out of memory");
-        return NULL;
-    }
-
-    size_t align = (uintptr_t)st->mem_ptr & (MAX_ALIGN - 1);
-    st->mem_ptr += align ? MAX_ALIGN - align : 0;
-
-    align = (uintptr_t)st->mem_end & (MAX_ALIGN - 1);
-    st->stack_ptr = st->mem_end - align;
+    st->mem_ptr = st->mem_end;
 
     if (copy) {
         st->text = st->start = json_alloc_dup(st, st->text, strlen(st->text) + 1);
