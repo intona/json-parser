@@ -26,7 +26,7 @@
 
 #include "json.h"
 
-struct state {
+struct json_state {
     char *start;
     char *text;
     char *mem_ptr;          // offset for allocations
@@ -53,7 +53,7 @@ union heap_align {
 
 #define IS_POW_2(x) ((x) > 0 && !((x) & (x - 1)))
 
-static void json_err_val(struct state *st, int err, const char *msg)
+static void json_err_val(struct json_state *st, int err, const char *msg)
 {
     if (st->opts->error == JSON_ERR_NOMEM)
         return;
@@ -63,17 +63,17 @@ static void json_err_val(struct state *st, int err, const char *msg)
         st->opts->msg_cb(st->opts->msg_cb_opaque, (st)->text - (st)->start, msg);
 }
 
-static void json_err(struct state *st, const char *msg)
+static void json_err(struct json_state *st, const char *msg)
 {
     json_err_val(st, JSON_ERR_SYNTAX, msg);
 }
 
-static void json_err_oom(struct state *st)
+static void json_err_oom(struct json_state *st)
 {
     json_err_val(st, JSON_ERR_NOMEM, "out of memory");
 }
 
-static void *json_stack_alloc(struct state *st, size_t size, size_t align)
+static void *json_stack_alloc(struct json_state *st, size_t size, size_t align)
 {
     assert(IS_POW_2(align));
     size = (size + (align - 1)) & ~(align - 1);
@@ -91,7 +91,7 @@ static void *json_stack_alloc(struct state *st, size_t size, size_t align)
 }
 
 // Available in malloc-mode only. Wraps mrealloc().
-static void *json_mrealloc(struct state *st, void *p, size_t size)
+static void *json_mrealloc(struct json_state *st, void *p, size_t size)
 {
     if (!st->opts->mrealloc || (!p && !size))
         return NULL;
@@ -106,7 +106,7 @@ static void *json_mrealloc(struct state *st, void *p, size_t size)
     return res;
 }
 
-static void *json_alloc_align(struct state *st, size_t size, size_t align)
+static void *json_alloc_align(struct json_state *st, size_t size, size_t align)
 {
     assert(IS_POW_2(align));
     size_t alm = align - 1;
@@ -126,7 +126,7 @@ static void *json_alloc_align(struct state *st, size_t size, size_t align)
     return st->mem_ptr;
 }
 
-static void *json_alloc(struct state *st, size_t size)
+static void *json_alloc(struct json_state *st, size_t size)
 {
     return json_alloc_align(st, size, _Alignof(union heap_align));
 }
@@ -136,7 +136,7 @@ static void *json_alloc(struct state *st, size_t size)
 // pointer may become invalid), on failure return NULL (input arr untouched).
 // This assumes arr is pre-allocated in the way this function does.
 // Only works if st->opts->mrealloc is set.
-static void *append_array(struct state *st, void *arr, size_t count,
+static void *append_array(struct json_state *st, void *arr, size_t count,
                           size_t item_size)
 {
     // If count is non-0 and not a power of 2, we must be within pre-allocated
@@ -156,10 +156,10 @@ static void *append_array(struct state *st, void *arr, size_t count,
     return arr;
 }
 
-static bool parse_value(struct state *st, struct json_tok *tok);
-static char *parse_str(struct state *st);
+static bool parse_value(struct json_state *st, struct json_tok *tok);
+static char *parse_str(struct json_state *st);
 
-static void skip_ws(struct state *st)
+static void skip_ws(struct json_state *st)
 {
     for (;;) {
         st->text += strspn(st->text, " \t\r\n");
@@ -173,7 +173,7 @@ static void skip_ws(struct state *st)
     }
 }
 
-static bool skip_str(struct state *st, const char *str)
+static bool skip_str(struct json_state *st, const char *str)
 {
     skip_ws(st);
     size_t str_len = strlen(str);
@@ -183,7 +183,7 @@ static bool skip_str(struct state *st, const char *str)
     return true;
 }
 
-static bool push_list_head(struct state *st, struct json_tok *tok)
+static bool push_list_head(struct json_state *st, struct json_tok *tok)
 {
     if (!st->idepth) {
         json_err_val(st, JSON_ERR_DEPTH, "maximum nesting depth reached");
@@ -218,7 +218,7 @@ static bool push_list_head(struct state *st, struct json_tok *tok)
 }
 
 // Parse JSON_TYPE_OBJECT or JSON_TYPE_ARRAY into tok.
-static bool parse_lists(struct state *st)
+static bool parse_lists(struct json_state *st)
 {
     while (st->top) {
         struct curlist *cur = st->top;
@@ -351,7 +351,7 @@ static bool parse_lists(struct state *st)
 }
 
 // Numeric escapes, e.g. "\u005C", without the "\u" prefix.
-static int parse_numeric_escape(struct state *st)
+static int parse_numeric_escape(struct json_state *st)
 {
     // Manually parse the 4-digit hex (easier than using strtol()).
     int v = 0;
@@ -423,7 +423,7 @@ static size_t encode_utf8(char *dst, uint32_t cp)
 // dst==NULL to determine the dst allocation size.
 // In-place parsing uses dst==st->text (result is always shorter than input).
 // Returns dst allocation size (final string length + 1), 0 on error.
-static size_t do_parse_str(struct state *st, char *dst)
+static size_t do_parse_str(struct json_state *st, char *dst)
 {
     if (st->text[0] != '"')
         return 0;
@@ -512,7 +512,7 @@ static size_t do_parse_str(struct state *st, char *dst)
     }
 }
 
-static char *parse_str(struct state *st)
+static char *parse_str(struct json_state *st)
 {
     if (st->destructive) {
         char *dst = st->text; // Do it in-place.
@@ -532,7 +532,7 @@ static char *parse_str(struct state *st)
     return dst;
 }
 
-static bool parse_number(struct state *st, struct json_tok *tok)
+static bool parse_number(struct json_state *st, struct json_tok *tok)
 {
     char *endptr;
     errno = 0;
@@ -548,7 +548,7 @@ static bool parse_number(struct state *st, struct json_tok *tok)
 // This will parse e.g. "truek" as JSON_TYPE_BOOL and move *text to "k", but
 // this is OK as the "k" could never be valid syntax in the parsing after it.
 // Returns false on any error.
-static bool parse_value(struct state *st, struct json_tok *tok)
+static bool parse_value(struct json_state *st, struct json_tok *tok)
 {
     skip_ws(st);
 
@@ -599,7 +599,7 @@ static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
 {
     struct json_tok *res = NULL;
     void *stack_alloc = NULL;
-    struct state *st = &(struct state){
+    struct json_state *st = &(struct json_state){
         .start = text,
         .text = text,
         .stack_ptr = mem,
