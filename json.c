@@ -34,9 +34,15 @@ struct json_state {
     char *stack_start;
     bool top_empty;
     bool destructive;
+    bool pull_mode;
+    bool initialized;
     int idepth;             // inverse nesting depth
     struct curlist *top;    // top-most list element (NULL if none)
     struct json_parse_opts *opts;
+    union {
+        struct json_array arr;
+        struct json_object obj;
+    } dummy; // for pull mode
 };
 
 struct curlist {
@@ -195,23 +201,30 @@ static bool push_list_head(struct json_state *st, struct json_tok *tok)
     if (!cur)
         return false;
 
-    cur->tok = tok;
     cur->prev_offset = st->top ? (char *)cur - (char *)st->top : 0;
     cur->is_object = tok->type == JSON_TYPE_OBJECT;
 
     st->top = cur;
     st->idepth--;
 
-    if (tok->type == JSON_TYPE_OBJECT) {
-        tok->u.object = json_alloc(st, sizeof(*tok->u.object));
-        if (!tok->u.object)
-            return false;
-        *tok->u.object = (struct json_object){0};
-    } else if (tok->type == JSON_TYPE_ARRAY) {
-        tok->u.array = json_alloc(st, sizeof(*tok->u.array));
-        if (!tok->u.array)
-            return false;
-        *tok->u.array = (struct json_array){0};
+    if (st->pull_mode) {
+        if (tok->type == JSON_TYPE_ARRAY)
+            tok->u.array = &st->dummy.arr;
+        if (tok->type == JSON_TYPE_OBJECT)
+            tok->u.object = &st->dummy.obj;
+    } else {
+        cur->tok = tok;
+        if (tok->type == JSON_TYPE_OBJECT) {
+            tok->u.object = json_alloc(st, sizeof(*tok->u.object));
+            if (!tok->u.object)
+                return false;
+            *tok->u.object = (struct json_object){0};
+        } else if (tok->type == JSON_TYPE_ARRAY) {
+            tok->u.array = json_alloc(st, sizeof(*tok->u.array));
+            if (!tok->u.array)
+                return false;
+            *tok->u.array = (struct json_array){0};
+        }
     }
 
     st->top_empty = true;
@@ -239,7 +252,7 @@ static bool parse_list_next(struct json_state *st)
         // items on the stack, it has to point at the end of the last item.
         st->stack_ptr = st->top ? (char *)(st->top + 1) : st->stack_start;
 
-        if (!st->opts->mrealloc) {
+        if (!st->opts->mrealloc && !st->pull_mode) {
             // Restore stack from previous list (it always has an item, cur).
             if (st->top) {
                 struct json_tok *tok = st->top->tok;
@@ -653,6 +666,13 @@ static bool parse_value(struct json_state *st, struct json_tok *tok)
     return false;
 }
 
+static void common_init(struct json_state *st)
+{
+    st->opts->error = JSON_ERR_NONE;
+    st->idepth =
+        (st->opts->depth > 0 ? st->opts->depth : JSON_DEFAULT_PARSE_DEPTH) - 1;
+}
+
 static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
                                  struct json_parse_opts *opts, bool copy)
 {
@@ -666,9 +686,7 @@ static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
         .opts = opts ? opts : &(struct json_parse_opts){0},
     };
 
-    st->opts->error = JSON_ERR_NONE;
-    st->idepth =
-        (st->opts->depth > 0 ? st->opts->depth : JSON_DEFAULT_PARSE_DEPTH) - 1;
+    common_init(st);
 
     if (!mem_size && st->opts->mrealloc) {
         // Estimate needed shadow-stack size.
@@ -719,4 +737,101 @@ struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
                             struct json_parse_opts *opts)
 {
     return do_parse((char *)text, mem, mem_size, opts, true);
+}
+
+struct json_state *json_pull_init_destructive(char *text,
+                                              void *mem, size_t mem_size,
+                                              struct json_parse_opts *opts)
+{
+    if (!opts)
+        return NULL;
+
+    struct json_state st_boot = {
+        .start = text,
+        .text = text,
+        .destructive = true,
+        .pull_mode = true,
+        .stack_ptr = mem,
+        .stack_start = mem,
+        .mem_ptr = (char *)mem + mem_size,
+        .opts = opts,
+    };
+
+    common_init(&st_boot);
+
+    if (st_boot.opts->mrealloc) {
+        json_err_val(&st_boot, JSON_ERR_INVAL, "mrealloc not supported");
+        return NULL;
+    }
+
+    struct json_state *st = json_alloc(&st_boot, sizeof(*st));
+    if (st)
+        *st = st_boot;
+    return st;
+}
+
+enum json_pull json_pull_next(struct json_state *st, struct json_tok *out,
+                              char **out_obj_key)
+{
+    *out = (struct json_tok){0};
+    *out_obj_key = NULL;
+
+    if (st->opts->error)
+        goto error;
+
+    if (!st->initialized) {
+        // First token.
+        st->initialized = true;
+        if (!parse_value(st, out))
+            goto error;
+        return JSON_PULL_TOK;
+    }
+
+    if (!st->top) {
+        skip_ws(st);
+        if (st->text[0]) {
+            json_err(st, "trailing text at end of JSON value");
+            goto error;
+        }
+        return JSON_PULL_END;
+    }
+
+    if (!parse_list_next(st)) {
+        if (st->opts->error)
+            goto error;
+        return JSON_PULL_CLOSE_LIST;
+    }
+
+    if (st->top->is_object) {
+        struct json_object_entry pobj = {0};
+        if (!parse_obj(st, &pobj))
+            goto error;
+        *out = pobj.value;
+        *out_obj_key = (char *)pobj.key;
+    } else {
+        if (!parse_arr(st, out))
+            goto error;
+    }
+
+    return JSON_PULL_TOK;
+
+error:
+    assert(st->opts->error);
+    return JSON_PULL_ERROR;
+}
+
+void json_pull_skip_nested(struct json_state *st)
+{
+    if (!st->top)
+        return;
+
+    // JSON_PULL_CLOSE_LIST will change idepth.
+    int depth = st->idepth;
+    while (st->idepth <= depth) {
+        struct json_tok tok;
+        char *key;
+        enum json_pull r = json_pull_next(st, &tok, &key);
+        if (r != JSON_PULL_TOK && r != JSON_PULL_CLOSE_LIST)
+            return;
+    }
 }

@@ -15,11 +15,12 @@ Main features
 -------------
 
 - Small, unintrusive, and complete.
-- Returns an easy to use AST.
+- Returns an easy to use AST. (But a pull API is also available.)
 - No malloc(), works on a provided preallocated chunk of memory.
 - Constant C stack usage: no recursion, no alloca, no VLAs.
-- Suitable for embedded use. (You may need to provide implementations for some
-  standard functions, see below.)
+- Suitable for embedded use. Targets system with medium resources: no malloc,
+  bounded stack, but not extremely resource constrained.
+  You may need to provide implementations for some standard functions, see below.
 - Optional malloc() support for complex uses (including non-embedded).
 - C11 (test.c and json_helpers_malloc.c also need strdup/strndup).
 
@@ -75,9 +76,9 @@ the sake of embedded use.
 
 The main parsing function, json_parse_destructive(), mutates the input text (i.e.
 it writes to the memory pointed to by the text argument). This is an attempt to
-save memory. Parsed string values do not need to be allocated from the provided
-memory region. The less tricky json_parse() simply copies the full input, and
-then performs destructive parsing on it.
+save memory: JSON string values can be unescaped and 0-terminated within the
+input memory, instead of allocating them separately from the working memory. The
+more user-friendly json_parse() always copies string values.
 
 An option to make the parser use malloc() was added later. To reduce code
 duplication, json.c was made to handle both code paths (with and without malloc).
@@ -85,6 +86,10 @@ To avoid the malloc() dependency, and due to the author's aversion to #if/#ifdef
 it was decided to use a callback instead of a compile time define. The wrapper
 in json_helpers_malloc.h hides this and other weird details. Unlike json_parse(),
 these functions use recursion.
+
+A pull API was added even later. This doesn't build a token tree, but returns a
+stream of tokens. It's always destructive (see above), and needs memory only for
+the json_state struct and the shadow stack.
 
 Test programs
 -------------

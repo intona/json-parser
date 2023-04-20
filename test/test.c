@@ -22,6 +22,53 @@ static size_t oom_left;
 static bool oom_hit;
 static bool enable_extensions;
 
+// (just in case you're wondering: this wouldn't be as easy to do without malloc)
+static bool pull_to_tree(struct json_state *st, struct json_tok *dst)
+{
+    while (1) {
+        struct json_tok tok;
+        char *key;
+        enum json_pull ev = json_pull_next(st, &tok, &key);
+
+        switch (ev) {
+        case JSON_PULL_ERROR:
+            assert(json_pull_next(st, &tok, &key) == ev);
+            return false;
+        case JSON_PULL_END:
+            assert(json_pull_next(st, &tok, &key) == ev);
+            return true;
+        case JSON_PULL_CLOSE_LIST:
+            return true;
+        case JSON_PULL_TOK: {
+            struct json_tok ntok = {0};
+            json_copy_inplace(&ntok, &tok);
+
+            bool ok = true;
+            if (ntok.type == JSON_TYPE_OBJECT || ntok.type == JSON_TYPE_ARRAY)
+                ok = pull_to_tree(st, &ntok);
+
+            if (dst->type == JSON_TYPE_INVALID) {
+                // used for first item
+                *dst = ntok;
+            } else if (dst->type == JSON_TYPE_OBJECT) {
+                assert(key);
+                json_set_nocopy(dst, key, &ntok);
+            } else if (dst->type == JSON_TYPE_ARRAY) {
+                json_array_insert_nocopy(dst, dst->u.array->count, &ntok);
+            } else {
+                assert(0); // successive tokens not in array/object -> bug
+            }
+
+            if (!ok)
+                return false;
+            break;
+        }
+        default:
+            assert(0);
+        }
+    }
+}
+
 static void *mrealloc(void *opaque, void *p, size_t sz)
 {
     if (!sz) {
@@ -50,9 +97,10 @@ enum parser {
     PARSER_STATIC_DESTRUCTIVE,
     PARSER_MREALLOC,
     PARSER_MALLOC, // wrapper for mrealloc, allocates even stack with malloc
+    PARSER_PULL,
 
     PARSER_FIRST = PARSER_STATIC,
-    PARSER_LAST = PARSER_MALLOC,
+    PARSER_LAST = PARSER_PULL,
 };
 
 struct testargs {
@@ -117,6 +165,18 @@ static bool run_test_(const char *text, const char *expect, struct testargs *arg
         tok = json_parse_malloc(tmp1, &opts);
         keeps_input = true;
         malloc_output = true;
+    } else if (parser == PARSER_PULL) {
+        struct json_state *st =
+            json_pull_init_destructive(tmp1, mem_arg, max_mem, &opts);
+        if (st) {
+            tok = json_copy(&(struct json_tok){0});
+            assert(tok);
+            if (!pull_to_tree(st, tok)) {
+                json_free(tok);
+                tok = NULL;
+            }
+            malloc_output = true;
+        }
     } else if (parser == PARSER_STATIC_DESTRUCTIVE) {
         tok = json_parse_destructive(tmp1, mem_arg, max_mem, &opts);
     } else {
@@ -436,6 +496,57 @@ static void test_malloc_helpers(void)
     json_free(root);
 }
 
+static void test_pull_skip(void)
+{
+    char input[] = "{\"a\":[1,2,3,4],\"b\":[5],\"c\":[6,7,8,9]}";
+    char tmp[200];
+    struct json_parse_opts opts = {0};
+    struct json_state *st =
+        json_pull_init_destructive(input, tmp, sizeof(tmp), &opts);
+    assert(st);
+    struct json_tok t;
+    char *k;
+    int r;
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_OBJECT);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY && strcmp(k, "a") == 0);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_DOUBLE && t.u.d == 1);
+    json_pull_skip_nested(st);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY && strcmp(k, "b") == 0);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_DOUBLE && t.u.d == 5);
+    json_pull_skip_nested(st); // returns to previous, even if CLOSE_LIST is next
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY && strcmp(k, "c") == 0);
+    json_pull_skip_nested(st);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_CLOSE_LIST);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_END);
+    // end remains
+    json_pull_skip_nested(st);
+    assert(r == JSON_PULL_END);
+    // not in a list
+    st = json_pull_init_destructive("123", tmp, sizeof(tmp), &opts);
+    json_pull_skip_nested(st);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_DOUBLE && t.u.d == 123);
+    // error during skipping
+    st = json_pull_init_destructive("[1,2,3,,", tmp, sizeof(tmp), &opts);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY);
+    json_pull_skip_nested(st);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_ERROR);
+    // error remains
+    json_pull_skip_nested(st);
+    r = json_pull_next(st, &t, &k);
+    assert(r == JSON_PULL_ERROR);
+}
+
 int main(void)
 {
     parsegen_test_nocut("  { }  ", "{}");
@@ -541,12 +652,15 @@ int main(void)
                       "{\"g\":[7,8,9,10,12,13,14,15,16]},11],\"field2\":2}");
 
     test_malloc_helpers();
+    test_pull_skip();
 
     // shadow stack alloc overflow calculation
     struct json_parse_opts opts = {.depth = INT_MAX};
     assert(!json_parse_malloc("123", &opts));
 
     opts.mrealloc = mrealloc;
+    assert(!json_pull_init_destructive("", NULL, 0, &opts));
+    assert(!json_pull_init_destructive("", NULL, 0, NULL));
     assert(!json_parse_destructive("[\"abc\" ...]", NULL, 0, &opts));
 
     uint64_t tmp[80];

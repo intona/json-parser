@@ -132,6 +132,9 @@ struct json_parse_opts {
     // Arrays/objects are over-allocated to power of 2 boundaries, which is due
     // to pre-allocation during parsing, and trades higher internal
     // fragmentation for speed.
+    // The callback must return normally. If it returns by longjmp() or throws
+    // C++ exceptions, the behavior is undefined. With json_pull*(), the
+    // callback is not allowed to call these functions in a reentrant way.
     void *(*mrealloc)(void *opaque, void *p, size_t sz);
 
     // Passed as first parameter to mrealloc(), unused otherwise.
@@ -167,5 +170,53 @@ struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
 // Setting opts->mrealloc disables this (will behave exactly like json_parse()).
 struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
                                         struct json_parse_opts *opts);
+
+// Opaque state for the pull parser API.
+struct json_state;
+
+// Initialize the pull parser. The returned json_state is allocated from mem.
+// The arguments are like json_parse_destructive(). All pointers are referenced
+// by json_state, so they must remain valid and none of the memory can be
+// changed by the caller as long as the json_state is used.
+// Like with json_parse(), mem_size limits the effective stack depth in addition
+// to opts->depth. It will use less memory than json_parse_destructive(), as it
+// doesn't have to allocate tokens.
+// Note: mrealloc is not supported (no real reason, it's trivial, but seems to
+//       have little usefulness, and wasn't what the author needed)
+//  text, mem, mem_size: like in json_parse_destructive()
+//  opts: this cannot be NULL
+//  returns: state for use with json_parser_pull(), NULL if out of memory to
+//           allocate the state, or mrealloc is set
+struct json_state *json_pull_init_destructive(char *text,
+                                              void *mem, size_t mem_size,
+                                              struct json_parse_opts *opts);
+
+enum json_pull {
+    JSON_PULL_ERROR = 0,    // an error happened, always 0, see opts->error
+    JSON_PULL_END,          // end of JSON input reached (redundant, because the
+                            // caller is supposed to track nesting of tokens)
+    JSON_PULL_TOK,          // a token was parsed (json_tok arg is set)
+    JSON_PULL_CLOSE_LIST,   // an array or object was closed
+};
+
+// Read the next token from the parser. The JSON_PULL_* value tells the caller
+// what was parsed. The ERROR and END states end parsing and never change.
+// Strings returned in *out are valid until the next call, and point into the
+// user memory or the JSON input text. Returned JSON_TYPE_ARRAY/JSON_TYPE_OBJECT
+// tokens are dummies with 0 items.
+//  st: state allocated with json_pull_init_destructive()
+//  out: written by the function; valid if JSON_PULL_TOK was returned, otherwise
+//       the contents are undefined; treat any referenced memory as read-only
+//  out_obj_key: *out_obj_key set by the function; valid if JSON_PULL_TOK was
+//       returned and an object is being parsed (then it has similar life time
+//       as string tokens returned in *out); NULL if not parsing an object
+//  returns: parser state, JSON_PULL_TOK if *out was set to a valid value
+enum json_pull json_pull_next(struct json_state *st, struct json_tok *out,
+                              char **out_obj_key);
+
+// Skip all tokens until the current array or object ends. Error information is
+// returned with the next json_pull_next() call (and opts->msg_cb, if set).
+// Does nothing if not in an array/object.
+void json_pull_skip_nested(struct json_state *st);
 
 #endif
