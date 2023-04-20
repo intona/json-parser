@@ -32,6 +32,7 @@ struct state {
     char *mem_ptr;          // offset for allocations
     char *stack_ptr;        // offset for stack
     char *mem_end;
+    bool destructive;
     int idepth;             // inverse nesting depth
     struct curlist *top;    // top-most list element (NULL if none)
     struct json_parse_opts *opts;
@@ -76,13 +77,16 @@ static void *json_stack_alloc(struct state *st, size_t size, size_t align)
 {
     assert(IS_POW_2(align));
     size = (size + (align - 1)) & ~(align - 1);
-    if (size > st->mem_ptr - st->stack_ptr) {
+    size_t disalign = (uintptr_t)st->stack_ptr & (align - 1);
+    if (disalign)
+        disalign = align - disalign;
+    if (size + disalign > st->mem_ptr - st->stack_ptr) {
         json_err_oom(st);
         return NULL;
     }
-    void *res = st->stack_ptr;
+    void *res = st->stack_ptr + disalign;
     assert(!((uintptr_t)res & (align - 1)));
-    st->stack_ptr += size;
+    st->stack_ptr += size + disalign;
     return res;
 }
 
@@ -102,10 +106,10 @@ static void *json_mrealloc(struct state *st, void *p, size_t size)
     return res;
 }
 
-// Allocate memory of given size, with heap_align alignment (and size!=0).
-static void *json_alloc(struct state *st, size_t size)
+static void *json_alloc_align(struct state *st, size_t size, size_t align)
 {
-    size_t alm = _Alignof(union heap_align) - 1;
+    assert(IS_POW_2(align));
+    size_t alm = align - 1;
 
     if (st->opts->mrealloc)
         return json_mrealloc(st, NULL, size);
@@ -122,12 +126,9 @@ static void *json_alloc(struct state *st, size_t size)
     return st->mem_ptr;
 }
 
-static void *json_alloc_dup(struct state *st, void *ptr, size_t size)
+static void *json_alloc(struct state *st, size_t size)
 {
-    void *new = json_alloc(st, size);
-    if (new)
-        memcpy(new, ptr, size);
-    return new;
+    return json_alloc_align(st, size, _Alignof(union heap_align));
 }
 
 // Reallocate the array arr to add an item at the end. On failure, return NULL
@@ -376,59 +377,73 @@ static int parse_numeric_escape(struct state *st)
     return v;
 }
 
-// Encode the given codepoint as UTF-8, write to dst, and return the pointer to
-// the next free byte. Can write at most 4 bytes. Returns NULL on error (invalid
-// unicode codepoints).
-static char *encode_utf8(char *dst, uint32_t cp)
+// How many bytes the given codepoint needs to be encoded as UTF-8 (0=error).
+static size_t utf8_len(uint32_t cp)
 {
-    if (cp >= 0xD800 && cp <= 0xDFFF)
-        return NULL; // invalid surrogate pair codepoints
-
-    if (cp <= 0x7F) {
-        *dst++ = cp;
+    if (cp >= 0xD800 && cp <= 0xDFFF) {
+        return 0; // invalid surrogate pair codepoints
+    } else if (cp <= 0x7F) {
+        return 1;
     } else if (cp <= 0x7FF) {
+        return 2;
+    } else if (cp <= 0xFFFF) {
+        return 3;
+    } else if (cp <= 0x10FFFF) {
+        return 4;
+    } else {
+        return 0; // invalid high codepoints
+    }
+}
+
+// Encode the given codepoint as UTF-8, write to dst, and return the number of
+// bytes written, which is utf8_len() bytes, at most 4 bytes, 0 on error.
+static size_t encode_utf8(char *dst, uint32_t cp)
+{
+    size_t len = utf8_len(cp);
+
+    if (len == 1) {
+        *dst++ = cp;
+    } else if (len == 2) {
         *dst++ = 0xC0 | (cp >> 6);
         *dst++ = 0x80 | (cp & 0x3F);
-    } else if (cp <= 0xFFFF) {
+    } else if (len == 3) {
         *dst++ = 0xE0 | (cp >> 12);
         *dst++ = 0x80 | ((cp >> 6) & 0x3F);
         *dst++ = 0x80 | (cp & 0x3F);
-    } else if (cp <= 0x10FFFF) {
+    } else if (len == 4) {
         *dst++ = 0xF0 | (cp >> 18);
         *dst++ = 0x80 | ((cp >> 12) & 0x3F);
         *dst++ = 0x80 | ((cp >> 6) & 0x3F);
         *dst++ = 0x80 | (cp & 0x3F);
-    } else {
-        return NULL; // invalid high codepoints
     }
-    return dst;
+
+    return len;
 }
 
-// Terminating the string with \0 and resolving escapes is done in-place to
-// reduce memory usage. The string starts at st->text, and the unescaped string
-// is "appended" to this position in-place.
-static char *parse_str(struct state *st)
+// dst==NULL to determine the dst allocation size.
+// In-place parsing uses dst==st->text (result is always shorter than input).
+// Returns dst allocation size (final string length + 1), 0 on error.
+static size_t do_parse_str(struct state *st, char *dst)
 {
     if (st->text[0] != '"')
-        return NULL;
+        return 0;
+    size_t len = 0;
     st->text += 1;
-    char *start = st->text;
-    char *dst = start;
     while (1) {
         unsigned char c = st->text[0];
         if (!c) {
             json_err(st, "closing '\"' missing in string literal");
-            return NULL;
+            return 0;
         }
         st->text += 1;
         if (c == '"') {
-            *dst = '\0';
-            if (st->opts->mrealloc)
-                start = json_alloc_dup(st, start, dst - start + 1);
-            return start;
+            len += 1;
+            if (dst)
+                *dst = '\0';
+            return len;
         } else if (c <= 0x1F) {
             json_err(st, "unescaped control character in string literal");
-            return NULL;
+            return 0;
         } else if (c == '\\') {
             c = st->text[0];
             if (c)
@@ -447,44 +462,74 @@ static char *parse_str(struct state *st)
                 // Numeric escapes, e.g. "\u005C"
                 int v = parse_numeric_escape(st);
                 if (v < 0)
-                    return NULL;
+                    return 0;
                 uint32_t cp = v;
                 // Surrogate pairs for characters outside of the BMP.
                 if (cp >= 0xD800 && cp <= 0xDBFF) {
                     if (!skip_str(st, "\\u")) {
                         json_err(st, "missing low surrogate pair");
-                        return NULL;
+                        return 0;
                     }
                     v = parse_numeric_escape(st);
                     if (v < 0)
-                        return NULL;
+                        return 0;
                     if (v < 0xDC00 || v > 0xDFFF) {
                         json_err(st, "invalid low surrogate pair");
-                        return NULL;
+                        return 0;
                     }
                     cp = ((cp & 0x3FF) << 10) + (v & 0x3FF) + 0x10000;
                 }
                 // What should \u0000 do? Just error out.
                 if (cp == 0) {
                     json_err(st, "0 byte escape rejected");
-                    return NULL;
+                    return 0;
                 }
-                // Note: in-place encoding is still possible. In the worst case,
-                // we write 4 bytes, while the escape syntax uses 6 bytes.
-                dst = encode_utf8(dst, cp);
-                if (!dst) {
+                size_t sz = 0;
+                if (dst) {
+                    // Note: in-place encoding is still possible. In the worst
+                    // case, we write 4 bytes, while the escape syntax uses 6
+                    // bytes.
+                    sz = encode_utf8(dst, cp);
+                    dst += sz;
+                } else {
+                    sz = utf8_len(cp);
+                }
+                if (!sz) {
                     json_err(st, "invalid unicode escape");
-                    return NULL;
+                    return 0;
                 }
+                len += sz;
                 continue;
             }
             default:
                 json_err(st, "unknown escape");
-                return NULL;
+                return 0;
             }
         }
-        *dst++ = c;
+        len += 1;
+        if (dst)
+            *dst++ = c;
     }
+}
+
+static char *parse_str(struct state *st)
+{
+    if (st->destructive) {
+        char *dst = st->text; // Do it in-place.
+        return do_parse_str(st, dst) ? dst : NULL;
+    }
+
+    char *start = st->text;
+    size_t len = do_parse_str(st, NULL);
+    if (!len)
+        return NULL;
+    char *dst = json_alloc_align(st, len, 1);
+    if (!dst)
+        return NULL;
+    st->text = start;
+    len = do_parse_str(st, dst);
+    assert(len); // it's impossible for the second pass to fail
+    return dst;
 }
 
 static bool parse_number(struct state *st, struct json_tok *tok)
@@ -553,12 +598,12 @@ static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
                                  struct json_parse_opts *opts, bool copy)
 {
     struct json_tok *res = NULL;
-    void *text_alloc = NULL;
     void *stack_alloc = NULL;
     struct state *st = &(struct state){
         .start = text,
         .text = text,
         .stack_ptr = mem,
+        .destructive = !(copy || (opts && opts->mrealloc)),
         .opts = opts ? opts : &(struct json_parse_opts){0},
     };
 
@@ -582,13 +627,6 @@ static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
     st->mem_end = st->stack_ptr + mem_size;
     st->mem_ptr = st->mem_end;
 
-    if (copy) {
-        st->text = st->start = json_alloc_dup(st, st->text, strlen(st->text) + 1);
-        if (!st->text)
-            return NULL;
-        text_alloc = st->text;
-    }
-
     res = json_alloc(st, sizeof(*res));
     if (!res)
         goto done;
@@ -608,7 +646,6 @@ done:
         st->opts->mrealloc_waste = st->opts->mrealloc ? res : NULL;
         res = NULL;
     }
-    json_mrealloc(st, text_alloc, 0);
     json_mrealloc(st, stack_alloc, 0);
     return res;
 }

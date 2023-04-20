@@ -116,8 +116,6 @@ struct json_parse_opts {
     // The following changes for the json_parse*() API:
     //  - struct json_tok values and all memory they reference are allocated
     //    with mrealloc()
-    //  - json_parse_destructive() may still clobber the source text (despite
-    //    the fact that all returned string json_toks are mrealloc()-allocated)
     //  - you don't need to pass mem/mem_size to the parser; if mem_size==0,
     //    the parser will allocate a shadow stack with mrealloc; if not, mem
     //    is used for the shadow stack; in all cases the parsing function still
@@ -157,7 +155,7 @@ struct json_tok *json_parse(const char *text, void *mem, size_t mem_size,
 // reasons and to save copying the input text to the provided memory buffer for
 // internal reasons. String fields in the returned json_tok tree will point into
 // text buffer.
-// Setting opts->mrealloc modifies this behavior, see struct json_parse_opts.
+// Setting opts->mrealloc disables this (will behave exactly like json_parse()).
 struct json_tok *json_parse_destructive(char *text, void *mem, size_t mem_size,
                                         struct json_parse_opts *opts);
 

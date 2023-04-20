@@ -48,10 +48,11 @@ static void *mrealloc(void *opaque, void *p, size_t sz)
 static bool run_test_(const char *text, const char *expect,
                       int max_mem, int max_depth, bool test_limits,
                       bool error_on_limits, int cutoff_input, bool use_mrealloc,
-                      bool use_mrealloc_for_real)
+                      bool use_mrealloc_for_real, bool nondestructive)
 {
     char tmp1_static[BUF_SZ];
     char tmp2_static[BUF_SZ];
+    char tmp3[BUF_SZ];
     char *tmp1 = tmp1_static;
     char *tmp2 = tmp2_static;
 
@@ -79,6 +80,8 @@ static bool run_test_(const char *text, const char *expect,
         cutoff_input = len;
     tmp1[cutoff_input] = '\0';
 
+    memcpy(tmp3, tmp1, len + 1);
+
     struct json_parse_opts opts = {
         .depth = max_depth,
         .msg_cb = test_limits ? NULL : json_msg_cb,
@@ -92,8 +95,15 @@ static bool run_test_(const char *text, const char *expect,
         // The test runner has two mrealloc paths, because json_parse_malloc()
         // is too opaque and does not let you test some of the limits.
         tok = json_parse_malloc(text, &opts);
+    } else if (nondestructive) {
+        tok = json_parse(tmp1, tmp2, max_mem, &opts);
     } else {
         tok = json_parse_destructive(tmp1, tmp2, max_mem, &opts);
+    }
+
+    if ((use_mrealloc_for_real || nondestructive) && strcmp(tmp1, tmp3) != 0) {
+        printf("input was changed\n");
+        abort();
     }
 
     for (int n = max_mem; n < BUF_SZ; n++)
@@ -143,17 +153,21 @@ static bool run_test(const char *text, const char *expect,
                      bool error_on_limits, int cutoff_input)
 {
     bool r = run_test_(text, expect, max_mem, max_depth, test_limits,
-                       error_on_limits, cutoff_input, false, false);
+                       error_on_limits, cutoff_input, false, false, false);
 
     // Test dynamic case; set test_limits=true because it basically means
     // not printing anything normally.
     bool r2 = run_test_(text, expect, max_mem, max_depth, true,
-                        error_on_limits, cutoff_input, true, false);
+                        error_on_limits, cutoff_input, true, false, false);
+
+    // non-destructive without mrealloc
+    bool rd = run_test_(text, expect, max_mem, max_depth, true,
+                        error_on_limits, cutoff_input, false, false, true);
 
     // Of course the results can be different if limits are applied (different
     // amounts of static memory area are used).
     if (!test_limits) {
-        if (r != r2) {
+        if (r != r2|| r != rd) {
             printf("Inconsistent behavior with static vs. malloc: %d %d\n", r, r2);
             printf("Test failed!\n");
             abort();
@@ -245,7 +259,7 @@ static void test_mrealloc_oom(const char *text, const char *expect)
     oom_hit = false;
     oom_left = (size_t)-1;
 
-    assert(run_test_(text, expect, 1024, 16, true, true, INT_MAX, true, false));
+    assert(run_test_(text, expect, 1024, 16, true, true, INT_MAX, true, false, false));
 
     // Step 2: test by reducing the memory budget by 1 byte each iteration.
     size_t needed = (size_t)-1 - oom_left;
@@ -257,7 +271,7 @@ static void test_mrealloc_oom(const char *text, const char *expect)
         oom_hit = false;
         oom_left = cur;
         bool r = run_test_(text, expect, 1024, 16, true, true, INT_MAX,
-                           true, false);
+                           true, false, false);
         if (r) {
             if (oom_hit) {
                 printf("should not have hit OOM\n");
@@ -428,7 +442,7 @@ int main(void)
 
     // The stuff above never actually tests json_parse_malloc() itself.
     if (!run_test_("{\"a\":123,\"bc\":[]}", "{\"a\":123,\"bc\":[]}",
-                   0, 0, false, false, INT_MAX, false, true))
+                   0, 0, false, false, INT_MAX, false, true, false))
     {
         printf("mrealloc failed\n");
         abort();
