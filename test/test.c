@@ -279,29 +279,6 @@ static void test_mrealloc_oom(const char *text, const char *expect)
     }
 }
 
-static void example(void)
-{
-    // Working memory for the parser. Must be large enough for any expected
-    // input. t (below) will point somewhere into this.
-    char tmp[1024];
-    // JSON text to parse.
-    static const char input[] = "{\"key1\": 123, \"key2\": [12, 34, 56]}";
-
-    struct json_tok *t = json_parse(input, tmp, sizeof(tmp), NULL);
-
-    assert(json_get_int(t, "key1", -1) == 123);
-
-    int sum = 0;
-    struct json_array *arr = json_get_array(t, "key2");
-    for (size_t n = 0; n < arr->count; n++) {
-        int v = json_get_int(&arr->items[n], NULL, -1);
-        printf(" array value: %d\n", v);
-        sum += v;
-    }
-
-    assert(sum == 12 + 34 + 56);
-}
-
 static void expect_tree(struct json_tok *tree, const char *expect)
 {
     char *s = json_to_string(tree);
@@ -370,7 +347,6 @@ static void test_malloc_helpers(void)
 
 int main(void)
 {
-    example();
     parsegen_test_nocut("  { }  ", "{}");
     parsegen_test_nocut("  true ", "true");
     parsegen_test_nocut("  false ", "false");

@@ -10,3 +10,5 @@ executable('json_test', 'test.c', libfiles,
            include_directories: incdir)
 executable('json_parser', 'parser.c', libfiles,
            include_directories: incdir)
+executable('example', 'example.c', libfiles,
+           include_directories: incdir)

@@ -90,7 +90,7 @@ Test programs
 
 These use the Meson build system: https://mesonbuild.com/Quick-guide.html
 
-test/test.c is a simple test of the parser and some of the helpers.
+test/example.c is a simple example how to use the parser and some of the helpers.
 
 test/parser.c expects a filename as argument, and returns success or failure.
 On failure, it also prints the error. This is suitable for use with
@@ -99,12 +99,15 @@ it passed all tests, except some SHOULD_HAVE_FAILEDs with number strictness,
 and 2 SHOULD_HAVE_PASSED where this parser rejects escapes resulting in strings
 with embedded zeros.)
 
+test/test.c is a complicated test program for the parser and some of the
+helpers.
+
 Known deviations from standard JSON
 -----------------------------------
 
 - Number parsing is not very strict and allows anything strtod() allows.
-- Some JSON variants require support other encodings (such as UTF-16), while
-  this parser requires UTF-8.
+- Some JSON variants require support for other encodings (such as UTF-16), while
+  this parser assumes UTF-8.
 - Some JSON variants require strict UTF-8, while this parser does not check
   whether input text is valid UTF-8. The API user must check for valid UTF-8 on
   its own if required.
