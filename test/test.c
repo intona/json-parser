@@ -50,37 +50,21 @@ static bool run_test_(const char *text, const char *expect,
                       bool error_on_limits, int cutoff_input, bool use_mrealloc,
                       bool use_mrealloc_for_real, bool nondestructive)
 {
-    char tmp1_static[BUF_SZ];
-    char tmp2_static[BUF_SZ];
-    char tmp3[BUF_SZ];
-    char *tmp1 = tmp1_static;
-    char *tmp2 = tmp2_static;
-
-    // Using mrealloc => ensure returned json_tok tree does not point to it by
-    // freeing it and letting address sanitizer do the checks.
-    if (use_mrealloc) {
-        tmp1 = malloc(BUF_SZ);
-        tmp2 = malloc(BUF_SZ);
-        assert(tmp1 && tmp2);
-    }
-
-    memset(tmp2, 0xDF, BUF_SZ);
     if (max_mem > BUF_SZ)
         max_mem = BUF_SZ;
+    char *tmp2 = malloc(max_mem);
+    assert(tmp2);
+    memset(tmp2, 0xDF, max_mem);
 
     if (!test_limits)
         printf("parsing: %s\n", text);
 
     size_t len = strlen(text);
-    if (len + 1 > BUF_SZ)
-        abort();
-    memcpy(tmp1, text, len + 1);
-
     if (cutoff_input > len)
         cutoff_input = len;
-    tmp1[cutoff_input] = '\0';
-
-    memcpy(tmp3, tmp1, len + 1);
+    char *tmp1 = strndup(text, cutoff_input);
+    char *tmp3 = strdup(tmp1);
+    assert(tmp1 && tmp3);
 
     struct json_parse_opts opts = {
         .depth = max_depth,
@@ -106,12 +90,13 @@ static bool run_test_(const char *text, const char *expect,
         abort();
     }
 
-    for (int n = max_mem; n < BUF_SZ; n++)
-        assert(tmp2[n] == (char)0xDF);
+    free(tmp3);
 
+    // Ensure mrealloc mode doesn't reference the source text or working memory.
     if (use_mrealloc) {
         free(tmp1);
         free(tmp2);
+        tmp1 = tmp2 = NULL;
         json_free(opts.mrealloc_waste);
     }
 
@@ -127,6 +112,9 @@ static bool run_test_(const char *text, const char *expect,
 
     if (use_mrealloc || use_mrealloc_for_real)
         json_free(tok);
+
+    free(tmp1);
+    free(tmp2);
 
     bool limits_exceeded = opts.error == JSON_ERR_NOMEM ||
                            opts.error == JSON_ERR_DEPTH;
