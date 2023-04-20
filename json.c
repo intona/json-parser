@@ -31,7 +31,6 @@ struct json_state {
     char *text;
     char *mem_ptr;          // offset for allocations
     char *stack_ptr;        // offset for stack
-    char *mem_end;
     bool destructive;
     int idepth;             // inverse nesting depth
     struct curlist *top;    // top-most list element (NULL if none)
@@ -217,7 +216,8 @@ static bool push_list_head(struct json_state *st, struct json_tok *tok)
     return true;
 }
 
-static bool parse_list_item(struct json_state *st)
+// Returns true if there's an item to parse. False on error or end of list.
+static bool parse_list_next(struct json_state *st)
 {
     struct curlist *cur = st->top;
     struct json_tok *tok = cur->tok;
@@ -261,7 +261,7 @@ static bool parse_list_item(struct json_state *st)
             }
         }
 
-        return true;
+        return false;
     }
 
     bool empty = true;
@@ -279,80 +279,110 @@ static bool parse_list_item(struct json_state *st)
 
         if (st->opts->enable_extensions) {
             skip_ws(st);
+            // let it see and process endsym
+            // relying on tail call optimization (no recursion) => no ugly goto
             if (st->text[0] == endsym[0])
-                return true; // let it see and process endsym
+                return parse_list_next(st);
         }
-    }
-
-    struct json_tok *item_tok = NULL;
-
-    if (tok->type == JSON_TYPE_OBJECT) {
-        struct json_object *obj = tok->u.object;
-        struct json_object_entry *e;
-        if (st->opts->mrealloc) {
-            void *new = append_array(st, obj->items, obj->count,
-                                     sizeof(obj->items[0]));
-            if (!new)
-                return false;
-            obj->items = new;
-            e = &obj->items[obj->count];
-        } else {
-            e = json_stack_alloc(st, sizeof(*e), _Alignof(*e));
-            if (!e)
-                return false;
-            if (!obj->count)
-                obj->items = e;
-        }
-        *e = (struct json_object_entry){0};
-        obj->count++;
-
-        skip_ws(st);
-        e->key = parse_str(st);
-        if (!e->key) {
-            json_err(st, "object member name expected (quoted string)");
-            return false;
-        }
-        if (!skip_str(st, ":")) {
-            json_err(st, "':' after object member name expected");
-            return false;
-        }
-
-        item_tok = &e->value;
-    } else if (tok->type == JSON_TYPE_ARRAY) {
-        struct json_array *arr = tok->u.array;
-        if (st->opts->mrealloc) {
-            void *new = append_array(st, arr->items, arr->count,
-                                     sizeof(arr->items[0]));
-            if (!new)
-                return false;
-            arr->items = new;
-            item_tok = &arr->items[arr->count];
-        } else {
-            item_tok = json_stack_alloc(st, sizeof(*item_tok),
-                                        _Alignof(*item_tok));
-            if (!item_tok)
-                return false;
-            if (!arr->count)
-                arr->items = item_tok;
-        }
-        *item_tok = (struct json_tok){0};
-        arr->count++;
-    }
-
-    if (!parse_value(st, item_tok)) {
-        json_err(st, "array/object value expected");
-        return false;
     }
 
     return true;
 }
 
-// Parse JSON_TYPE_OBJECT or JSON_TYPE_ARRAY into tok.
-static bool parse_lists(struct json_state *st)
+static struct json_object_entry *alloc_obj_item(struct json_state *st,
+                                                struct json_object *obj)
 {
+    struct json_object_entry *e;
+    if (st->opts->mrealloc) {
+        void *new = append_array(st, obj->items, obj->count,
+                                    sizeof(obj->items[0]));
+        if (!new)
+            return NULL;
+        obj->items = new;
+        e = &obj->items[obj->count];
+    } else {
+        e = json_stack_alloc(st, sizeof(*e), _Alignof(*e));
+        if (!e)
+            return NULL;
+        if (!obj->count)
+            obj->items = e;
+    }
+    *e = (struct json_object_entry){0};
+    obj->count++;
+    return e;
+}
+
+static bool parse_obj(struct json_state *st, struct json_object_entry *e)
+{
+    skip_ws(st);
+    e->key = parse_str(st);
+    if (!e->key) {
+        json_err(st, "object member name expected (quoted string)");
+        return false;
+    }
+    if (!skip_str(st, ":")) {
+        json_err(st, "':' after object member name expected");
+        return false;
+    }
+
+    bool r = parse_value(st, &e->value);
+    if (!r)
+        json_err(st, "object value expected");
+    return r;
+}
+
+static struct json_tok *alloc_arr_item(struct json_state *st,
+                                       struct json_array *arr)
+{
+    struct json_tok *item_tok;
+    if (st->opts->mrealloc) {
+        void *new = append_array(st, arr->items, arr->count, sizeof(arr->items[0]));
+        if (!new)
+            return NULL;
+        arr->items = new;
+        item_tok = &arr->items[arr->count];
+    } else {
+        item_tok = json_stack_alloc(st, sizeof(*item_tok), _Alignof(*item_tok));
+        if (!item_tok)
+            return NULL;
+        if (!arr->count)
+            arr->items = item_tok;
+    }
+    *item_tok = (struct json_tok){0};
+    arr->count++;
+    return item_tok;
+}
+
+static bool parse_arr(struct json_state *st, struct json_tok *e)
+{
+    bool r = parse_value(st, e);
+    if (!r)
+        json_err(st, "array value expected");
+    return r;
+}
+
+static bool parse_ast(struct json_state *st, struct json_tok *res)
+{
+    if (!parse_value(st, res))
+        return false;
+
     while (st->top) {
-        if (!parse_list_item(st))
-            return false;
+        if (!parse_list_next(st)) {
+            if (st->opts->error)
+                return false;
+            continue;
+        }
+
+        struct json_tok *tok = st->top->tok;
+        if (tok->type == JSON_TYPE_OBJECT) {
+            struct json_object_entry *obj = alloc_obj_item(st, tok->u.object);
+            if (!obj || !parse_obj(st, obj))
+                return false;
+        } else if (tok->type == JSON_TYPE_ARRAY) {
+            struct json_tok *e = alloc_arr_item(st, tok->u.array);
+            if (!e || !parse_arr(st, e))
+                return false;
+        }
     }
 
     return true;
@@ -632,14 +662,13 @@ static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
         st->stack_ptr = stack_alloc;
     }
 
-    st->mem_end = st->stack_ptr + mem_size;
-    st->mem_ptr = st->mem_end;
+    st->mem_ptr = st->stack_ptr + mem_size;
 
     res = json_alloc(st, sizeof(*res));
     if (!res)
         goto done;
 
-    if (!parse_value(st, res) || !parse_lists(st))
+    if (!parse_ast(st, res))
         goto done;
 
     // No trailing non-whitespace text allowed.
