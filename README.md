@@ -153,6 +153,12 @@ This lists incompatible API changes done starting 2022.
     depth. The old behavior can be restored by setting json_parse_opts.depth
     to INT_MAX.
 
+* 2023.09.08:
+
+    json_parse[_destructive] with json_parse_opts.mrealloc set to non-NULL and
+    mem_size argument set to 0 behaves differently: it allocates a stack with
+    mrealloc, instead of probably failing to parse the input.
+
 License
 -------
 

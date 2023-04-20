@@ -552,28 +552,44 @@ static bool parse_value(struct state *st, struct json_tok *tok)
 static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
                                  struct json_parse_opts *opts, bool copy)
 {
+    struct json_tok *res = NULL;
+    void *text_alloc = NULL;
+    void *stack_alloc = NULL;
     struct state *st = &(struct state){
         .start = text,
         .text = text,
         .stack_ptr = mem,
-        .mem_end = (char *)mem + mem_size,
         .opts = opts ? opts : &(struct json_parse_opts){0},
     };
 
+    st->opts->error = JSON_ERR_NONE;
     st->idepth =
         (st->opts->depth > 0 ? st->opts->depth : JSON_DEFAULT_PARSE_DEPTH) - 1;
 
-    st->opts->error = JSON_ERR_NONE;
+    if (!mem_size && st->opts->mrealloc) {
+        // Estimate needed shadow-stack size.
+        if (st->idepth + 1 < INT_MAX / (sizeof(struct curlist))) {
+            mem_size = (st->idepth + 1) * sizeof(struct curlist);
+            stack_alloc = json_mrealloc(st, NULL, mem_size);
+        }
+        if (!stack_alloc) {
+            json_err_val(st, JSON_ERR_NOMEM, "out of memory (allocating stack)");
+            goto done;
+        }
+        st->stack_ptr = stack_alloc;
+    }
+
+    st->mem_end = st->stack_ptr + mem_size;
     st->mem_ptr = st->mem_end;
 
     if (copy) {
         st->text = st->start = json_alloc_dup(st, st->text, strlen(st->text) + 1);
         if (!st->text)
             return NULL;
+        text_alloc = st->text;
     }
 
-    void *text_alloc = copy ? st->text : NULL;
-    struct json_tok *res = json_alloc(st, sizeof(*res));
+    res = json_alloc(st, sizeof(*res));
     if (!res)
         goto done;
 
@@ -593,6 +609,7 @@ done:
         res = NULL;
     }
     json_mrealloc(st, text_alloc, 0);
+    json_mrealloc(st, stack_alloc, 0);
     return res;
 }
 

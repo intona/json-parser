@@ -18,37 +18,14 @@ static void *mrealloc(void *opaque, void *p, size_t sz)
 
 struct json_tok *json_parse_malloc(const char *text, struct json_parse_opts *opts)
 {
-    struct json_tok *res = NULL;
-    void *mem = NULL;
-    size_t text_len = strlen(text);
     struct json_parse_opts s_opts = {0};
     if (opts)
         s_opts = *opts;
 
     s_opts.mrealloc = mrealloc;
-    if (s_opts.depth <= 0)
-        s_opts.depth = JSON_DEFAULT_PARSE_DEPTH; // for size calculation below
 
-    size_t mem_size = text_len + 1;
+    struct json_tok *res = json_parse(text, NULL, 0, &s_opts);
 
-    // Estimate needed shadow-stack size (this is a guess based on json.c
-    // internals). On overflow let malloc() fail.
-    if (s_opts.depth < ((size_t)-1 - mem_size - 16) / (sizeof(void *) * 2)) {
-        mem_size = 16 + s_opts.depth * sizeof(void *) * 2;
-    } else {
-        mem_size = (size_t)-1;
-    }
-
-    mem = malloc(mem_size);
-    if (!mem) {
-        s_opts.error = JSON_ERR_NOMEM;
-        goto done;
-    }
-
-    res = json_parse(text, mem, mem_size, &s_opts);
-
-done:
-    free(mem);
     json_free(s_opts.mrealloc_waste);
     // Copy back any other results passed through json_parse_opts.
     if (opts)

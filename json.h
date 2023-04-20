@@ -79,6 +79,9 @@ struct json_parse_opts {
     // larger than the depth parameter provided here, an error is returned.
     // depth<=0 sets the depth to JSON_DEFAULT_PARSE_DEPTH.
     // depth=INT_MAX sets the maximum allowed depth.
+    // Note if json_parse_malloc() is used (or mrealloc in some cases), the
+    // entire stack is pre-allocated according to the depth field, so you
+    // shouldn't set this to a very high value, and INT_MAX intentionally fails.
     int depth;
 
     // msg_cb() is called with the given opaque field. loc is the byte
@@ -115,8 +118,10 @@ struct json_parse_opts {
     //    with mrealloc()
     //  - json_parse_destructive() may still clobber the source text (despite
     //    the fact that all returned string json_toks are mrealloc()-allocated)
-    //  - the mem/mem_size memory is still used for the internal parsing stack,
-    //    and the parsing function still has constant C stack usage
+    //  - you don't need to pass mem/mem_size to the parser; if mem_size==0,
+    //    the parser will allocate a shadow stack with mrealloc; if not, mem
+    //    is used for the shadow stack; in all cases the parsing function still
+    //    has constant C stack usage
     // Arrays/objects are over-allocated to power of 2 boundaries, which is due
     // to pre-allocation during parsing, and trades higher internal
     // fragmentation for speed.
