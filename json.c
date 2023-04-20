@@ -54,6 +54,8 @@ union heap_align {
 
 static void json_err_val(struct state *st, int err, const char *msg)
 {
+    if (st->opts->error == JSON_ERR_NOMEM)
+        return;
     if (!st->opts->error)
         st->opts->error = err;
     if (st->opts->msg_cb)
