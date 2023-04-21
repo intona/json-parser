@@ -157,6 +157,7 @@ void json_out_continue_string(struct json_out *out, const char *str)
             switch (c) {
             case '\\': c = '\\'; break;
             case '\"': c = '\"'; break;
+            case '\b': c = 'b'; break;
             case '\f': c = 'f'; break;
             case '\n': c = 'n'; break;
             case '\r': c = 'r'; break;
