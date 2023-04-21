@@ -176,7 +176,6 @@ static void skip_ws(struct json_state *st)
 
 static bool skip_str(struct json_state *st, const char *str)
 {
-    skip_ws(st);
     size_t str_len = strlen(str);
     if (strncmp(st->text, str, str_len) != 0)
         return false;
@@ -225,6 +224,7 @@ static bool parse_list_next(struct json_state *st)
     struct curlist *cur = st->top;
 
     char *endsym = cur->is_object ? "}" : "]";
+    skip_ws(st);
 
     if (skip_str(st, endsym)) {
         // Continue parsing into the previous list (returning from recursion).
@@ -289,6 +289,7 @@ static bool parse_list_next(struct json_state *st)
     }
 
     if (!st->top_empty) {
+        skip_ws(st);
         if (!skip_str(st, ",")) {
             json_err(st, "',' expected");
             return false;
@@ -339,6 +340,7 @@ static bool parse_obj(struct json_state *st, struct json_object_entry *e)
         json_err(st, "object member name expected (quoted string)");
         return false;
     }
+    skip_ws(st);
     if (!skip_str(st, ":")) {
         json_err(st, "':' after object member name expected");
         return false;

@@ -376,6 +376,8 @@ int main(void)
     parsegen_test("\"\\uD800\\uDC00\"", "\"\xF0\x90\x80\x80\"");
     parsegen_test("\"\\uD803\\uDE6D\"", "\"\xF0\x90\xB9\xAD\"");
     parsegen_test("\"\\uDBFF\\uDFFF\"", "\"\xF4\x8F\xBF\xBF\"");
+    // Missing surrogate codepoints.
+    parsegen_test("\"\\uD800 \\uDC00\"", "<error>");
     // Must fail.
     parsegen_test_nocut("  truek", "<error>");
     parsegen_test_nocut("  true1", "<error>");
