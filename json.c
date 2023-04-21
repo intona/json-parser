@@ -140,9 +140,10 @@ static void *json_alloc(struct json_state *st, size_t size)
 static void *append_array(struct json_state *st, void *arr, size_t count,
                           size_t item_size)
 {
+    assert(st->opts->mrealloc);
     // If count is non-0 and not a power of 2, we must be within pre-allocated
     // bounds, so there is enough space.
-    if (st->opts->mrealloc && (!count || IS_POW_2(count))) {
+    if ((!count || IS_POW_2(count))) {
         if (count < ((size_t)-1) / item_size / 2) {
             arr = st->opts->mrealloc(st->opts->mrealloc_opaque, arr,
                                      (count ? count * 2 : 2) * item_size);
@@ -239,7 +240,7 @@ static bool parse_list_next(struct json_state *st)
         st->stack_ptr = st->top ? (char *)(st->top + 1) : st->stack_start;
 
         if (!st->opts->mrealloc) {
-            // Restore stack if previous list had items pushed on it.
+            // Restore stack from previous list (it always has an item, cur).
             if (st->top) {
                 struct json_tok *tok = st->top->tok;
                 void *items = NULL;
@@ -251,8 +252,7 @@ static bool parse_list_next(struct json_state *st)
                     items = tok->u.array->items;
                     sz = tok->u.array->count * sizeof(tok->u.array->items[0]);
                 }
-                if (items && sz)
-                    st->stack_ptr = (char *)items + sz;
+                st->stack_ptr = (char *)items + sz;
             }
 
             // At the end of the parsing loop, all items will have been
@@ -274,7 +274,7 @@ static bool parse_list_next(struct json_state *st)
             if (sz) {
                 nitems = json_alloc(st, sz);
                 if (!nitems)
-                    return false;
+                    return false; // does not happen in practice
                 memmove(nitems, items, sz); // may overlap
             }
 

@@ -45,47 +45,85 @@ static void *mrealloc(void *opaque, void *p, size_t sz)
 
 #define BUF_SZ 4096
 
-static bool run_test_(const char *text, const char *expect,
-                      int max_mem, int max_depth, bool test_limits,
-                      bool error_on_limits, int cutoff_input, bool use_mrealloc,
-                      bool use_mrealloc_for_real, bool nondestructive)
+enum parser {
+    PARSER_STATIC,
+    PARSER_STATIC_DESTRUCTIVE,
+    PARSER_MREALLOC,
+    PARSER_MALLOC, // wrapper for mrealloc, allocates even stack with malloc
+
+    PARSER_FIRST = PARSER_STATIC,
+    PARSER_LAST = PARSER_MALLOC,
+};
+
+struct testargs {
+    int max_mem;
+    int max_depth;
+    bool test_limits;
+    bool error_on_limits;
+    bool silent;
+    int input_len_1;
+    int mem_disalign;
+    enum parser parser;
+};
+
+static bool run_test_(const char *text, const char *expect, struct testargs *args)
 {
+    size_t len = strlen(text);
+    int max_mem = args->max_mem;
+    int max_depth = args->max_depth;
+    bool test_limits = args->test_limits;
+    bool error_on_limits = args->error_on_limits;
+    int cutoff_input = args->input_len_1 ? args->input_len_1 - 1 : len;
+    enum parser parser = args->parser;
+
     if (max_mem > BUF_SZ)
         max_mem = BUF_SZ;
-    char *tmp2 = malloc(max_mem);
+    char *tmp2 = malloc(max_mem + args->mem_disalign);
     assert(tmp2);
     memset(tmp2, 0xDF, max_mem);
+    void *mem_arg = tmp2 + args->mem_disalign;
 
-    if (!test_limits)
-        printf("parsing: %s\n", text);
-
-    size_t len = strlen(text);
     if (cutoff_input > len)
         cutoff_input = len;
+
+    bool silent = args->silent || args->test_limits;
+
+    if (!silent) {
+        //printf("parsing: '%s' (mode=%d, mem=%d, depth=%d, cut=%d/%zu)\n", text,
+        //       parser, max_mem, max_depth, cutoff_input, len);
+        printf("parsing: '%s' (mode=%d)\n", text, parser);
+    }
+
     char *tmp1 = strndup(text, cutoff_input);
     char *tmp3 = strdup(tmp1);
     assert(tmp1 && tmp3);
 
     struct json_parse_opts opts = {
         .depth = max_depth,
-        .msg_cb = test_limits ? NULL : json_msg_cb,
-        .mrealloc = use_mrealloc ? mrealloc : NULL,
+        .msg_cb = silent ? NULL : json_msg_cb,
+        .mrealloc = parser == PARSER_MREALLOC ? mrealloc : NULL,
         .enable_extensions = enable_extensions,
     };
 
     struct json_tok *tok = NULL;
+    bool keeps_input = false;
+    bool malloc_output = false;
 
-    if (use_mrealloc_for_real) {
-        // The test runner has two mrealloc paths, because json_parse_malloc()
-        // is too opaque and does not let you test some of the limits.
-        tok = json_parse_malloc(text, &opts);
-    } else if (nondestructive) {
-        tok = json_parse(tmp1, tmp2, max_mem, &opts);
+    if (parser == PARSER_STATIC || parser == PARSER_MREALLOC) {
+        tok = json_parse(tmp1, mem_arg, max_mem, &opts);
+        keeps_input = true;
+        malloc_output = !!opts.mrealloc;
+    } else if (parser == PARSER_MALLOC) {
+        tok = json_parse_malloc(tmp1, &opts);
+        keeps_input = true;
+        malloc_output = true;
+    } else if (parser == PARSER_STATIC_DESTRUCTIVE) {
+        tok = json_parse_destructive(tmp1, mem_arg, max_mem, &opts);
     } else {
-        tok = json_parse_destructive(tmp1, tmp2, max_mem, &opts);
+        assert(0);
     }
 
-    if ((use_mrealloc_for_real || nondestructive) && strcmp(tmp1, tmp3) != 0) {
+    if (keeps_input && strcmp(tmp1, tmp3) != 0) {
         printf("input was changed\n");
         abort();
     }
@@ -93,7 +131,7 @@ static bool run_test_(const char *text, const char *expect,
     free(tmp3);
 
     // Ensure mrealloc mode doesn't reference the source text or working memory.
-    if (use_mrealloc) {
+    if (malloc_output) {
         free(tmp1);
         free(tmp2);
         tmp1 = tmp2 = NULL;
@@ -105,12 +143,12 @@ static bool run_test_(const char *text, const char *expect,
     json_out_init(&dump, tmp, sizeof(tmp));
     json_out_write(&dump, tok);
     char *out = json_out_get_output(&dump);
-    if (!test_limits)
+    if (!silent)
         printf(" =>      %s\n", out ? out : "<error?>");
 
     bool success = !!tok;
 
-    if (use_mrealloc || use_mrealloc_for_real)
+    if (malloc_output)
         json_free(tok);
 
     free(tmp1);
@@ -136,83 +174,124 @@ static bool run_test_(const char *text, const char *expect,
     return true;
 }
 
-static bool run_test(const char *text, const char *expect,
-                     int max_mem, int max_depth, bool test_limits,
-                     bool error_on_limits, int cutoff_input)
-{
-    bool r = run_test_(text, expect, max_mem, max_depth, test_limits,
-                       error_on_limits, cutoff_input, false, false, false);
-
-    // Test dynamic case; set test_limits=true because it basically means
-    // not printing anything normally.
-    bool r2 = run_test_(text, expect, max_mem, max_depth, true,
-                        error_on_limits, cutoff_input, true, false, false);
-
-    // non-destructive without mrealloc
-    bool rd = run_test_(text, expect, max_mem, max_depth, true,
-                        error_on_limits, cutoff_input, false, false, true);
-
-    // Of course the results can be different if limits are applied (different
-    // amounts of static memory area are used).
-    if (!test_limits) {
-        if (r != r2|| r != rd) {
-            printf("Inconsistent behavior with static vs. malloc: %d %d\n", r, r2);
-            printf("Test failed!\n");
-            abort();
-        }
-    }
-
-    return r;
-}
-
 static void parsegen_test_full(const char *text, const char *expect,
                                bool test_cutoff)
 {
     int mem = 4096;
     int depth = 10;
     int input = strlen(text);
+    bool res;
 
-    run_test(text, expect, mem, depth, false, false, input);
-
-    // Test max. stack depth that works.
-    bool depth_ok = true;
-    for (int n = depth; n >= 1; n--) {
-        bool ok = run_test(text, expect, mem, n, true, true, input);
-        if (ok != depth_ok) {
-            if (depth_ok) {
-                printf(" ... max depth: %d\n", n);
-            } else {
-                // Lower depth worked again => makes no sense.
-                printf("oh no (depth)\n");
-                abort();
-            }
-            depth_ok = ok;
+    for (int parser = PARSER_FIRST; parser <= PARSER_LAST; parser++) {
+        struct testargs args2 = {
+            .max_mem = mem,
+            .max_depth = depth,
+            .parser = parser,
+        };
+        bool r = run_test_(text, expect, &args2);
+        if (parser == PARSER_FIRST) {
+            res = r;
+        } else if (res != r) {
+            printf("inconsistent\n");
+            abort();
         }
-    }
 
-    // Test max. memory size that works.
-    bool mem_ok = true;
-    for (int n = mem; n >= 0; n--) {
-        bool ok = run_test(text, expect, n, depth, true, true, input);
-        if (ok != mem_ok) {
-            if (mem_ok) {
-                printf(" ... max mem: %d\n", n);
-            } else {
-                // Lower memory worked again => makes no sense.
-                printf("oh no (mem)\n");
-                abort();
+        // Test min. stack depth that works.
+        bool depth_ok = true;
+        int depth_ok_n = -1;
+        for (int n = depth; n >= 1; n--) {
+            struct testargs args = {
+                .max_mem = mem,
+                .max_depth = depth,
+                .parser = parser,
+                .test_limits = true,
+                .error_on_limits = true,
+            };
+            bool ok = run_test_(text, expect, &args);
+            if (ok)
+                depth_ok_n = n;
+            if (ok != depth_ok) {
+                if (!depth_ok) {
+                    // Lower depth worked again => makes no sense.
+                    printf("oh no (depth)\n");
+                    abort();
+                }
+                depth_ok = ok;
             }
-            mem_ok = ok;
         }
-    }
+        printf(" ... min depth: %d\n", depth_ok_n);
 
-    // Test cut off input.
-    if (test_cutoff) {
-        for (int n = input - 2; n >= 0; n--) {
-            bool ok = run_test(text, expect, mem, depth, true, false, n);
-            if (!ok) {
-                printf("oh no (cut off at %d)\n", n);
-                abort();
+        // Test min. memory size that works.
+        bool mem_ok = true;
+        int mem_ok_n = -1;
+        for (int n = mem; n >= 0; n--) {
+            int mem_arg = n;
+            int mem_parser = parser;
+            if (parser == PARSER_MREALLOC && n == 0)
+                break; // mrealloc allocs stack itself at depth==0
+            if (parser == PARSER_MALLOC) {
+                // Note: skip the actual PARSER_MALLOC, test PARSER_MREALLOC
+                // twice (first limiting the shadow stack memory, then actual
+                // mrealloc limiting)
+                mem_parser = PARSER_MREALLOC;
+                oom_enable = true;
+                oom_hit = false;
+                oom_left = n;
+                mem_arg = 0;
+            }
+            struct testargs args = {
+                .max_mem = mem_arg,
+                .max_depth = depth,
+                .parser = mem_parser,
+                .test_limits = true,
+                .error_on_limits = true,
+            };
+            bool ok = run_test_(text, expect, &args);
+            if (parser == PARSER_MALLOC) {
+                oom_enable = false;
+            }
+            if (ok)
+                mem_ok_n = n;
+            if (ok != mem_ok) {
+                if (!mem_ok) {
+                    // Lower memory worked again => makes no sense.
+                    printf("oh no (mem)\n");
+                    abort();
+                }
+                mem_ok = ok;
+            }
+        }
+        printf(" ... min mem: %d\n", mem_ok_n);
+
+        // Test cut off input.
+        if (test_cutoff) {
+            for (int n = input - 2; n >= 0; n--) {
+                struct testargs args = {
+                    .max_mem = mem,
+                    .max_depth = depth,
+                    .parser = parser,
+                    .test_limits = true,
+                    .error_on_limits = false,
+                    .input_len_1 = n + 1,
+                };
+                bool ok = run_test_(text, expect, &args);
+                if (!ok) {
+                    printf("oh no (cut off at %d)\n", n);
+                    abort();
+                }
+            }
+        }
+
+        if (parser == PARSER_STATIC) {
+            for (int n = 0; n < 16; n++) {
+                struct testargs args = {
+                    .max_mem = mem,
+                    .max_depth = depth,
+                    .parser = parser,
+                    .mem_disalign = n,
+                    .silent = true,
+                };
+                assert(run_test_(text, expect, &args));
             }
         }
     }
@@ -247,7 +326,14 @@ static void test_mrealloc_oom(const char *text, const char *expect)
     oom_hit = false;
     oom_left = (size_t)-1;
 
-    assert(run_test_(text, expect, 1024, 16, true, true, INT_MAX, true, false, false));
+    struct testargs args = {
+        .max_mem = 1024,
+        .max_depth = 16,
+        .parser = PARSER_MREALLOC,
+        .test_limits = true,
+        .error_on_limits = true,
+    };
+    assert(run_test_(text, expect, &args));
 
     // Step 2: test by reducing the memory budget by 1 byte each iteration.
     size_t needed = (size_t)-1 - oom_left;
@@ -258,8 +344,9 @@ static void test_mrealloc_oom(const char *text, const char *expect)
         oom_enable = true;
         oom_hit = false;
         oom_left = cur;
-        bool r = run_test_(text, expect, 1024, 16, true, true, INT_MAX,
-                           true, false, false);
+        bool r = run_test_(text, expect, &args);
+        if (cur == needed + 1)
+            assert(r);
         if (r) {
             if (oom_hit) {
                 printf("should not have hit OOM\n");
@@ -279,6 +366,8 @@ static void test_mrealloc_oom(const char *text, const char *expect)
             failed = true;
         }
     }
+
+    oom_enable = false;
 }
 
 static void expect_tree(struct json_tok *tree, const char *expect)
@@ -350,10 +439,13 @@ static void test_malloc_helpers(void)
 int main(void)
 {
     parsegen_test_nocut("  { }  ", "{}");
+    parsegen_test_nocut("  [ ]  ", "[]");
     parsegen_test_nocut("  true ", "true");
     parsegen_test_nocut("  false ", "false");
     parsegen_test_nocut("  null ", "null");
     parsegen_test_nocut(" 123 ", "123");
+    parsegen_test_nocut(" \"\\\\\\\"\\/\\b\\f\\n\\r\\t\" ",
+                        "\"\\\\\\\"/\\b\\f\\n\\r\\t\"");
     parsegen_test("{\"field1\": \"test\", \"field2\" : 2}",
                   "{\"field1\":\"test\",\"field2\":2}");
     parsegen_test(" [ 3, 4, true, false ,null ] ", "[3,4,true,false,null]");
@@ -376,8 +468,20 @@ int main(void)
     parsegen_test("\"\\uD800\\uDC00\"", "\"\xF0\x90\x80\x80\"");
     parsegen_test("\"\\uD803\\uDE6D\"", "\"\xF0\x90\xB9\xAD\"");
     parsegen_test("\"\\uDBFF\\uDFFF\"", "\"\xF4\x8F\xBF\xBF\"");
+    parsegen_test("\"\\udbff\\udffF\"", "\"\xF4\x8F\xBF\xBF\"");
     // Missing surrogate codepoints.
     parsegen_test("\"\\uD800 \\uDC00\"", "<error>");
+    // Invalid surrogate codepoints.
+    parsegen_test("\"\\uDFFF\"", "<error>");
+    parsegen_test("\"\\uDBFF\\uCFFF\"", "<error>");
+    parsegen_test("\"\\uDBFF\\uEFFF\"", "<error>");
+    // Invalid escape syntax.
+    parsegen_test("\"\\udbff\\udfxF\"", "<error>");
+    parsegen_test("\"\\udbff\\udffx\"", "<error>");
+    parsegen_test("\"\\udbff\\uxffF\"", "<error>");
+    parsegen_test("\"\\udbff\\uxffF\"", "<error>");
+    parsegen_test("\"\\udbff\\xdffF\"", "<error>");
+    parsegen_test("\"\\Udbff\\UdffF\"", "<error>");
     // Must fail.
     parsegen_test_nocut("  truek", "<error>");
     parsegen_test_nocut("  true1", "<error>");
@@ -388,6 +492,7 @@ int main(void)
     parsegen_test("  ", "<error>");
     parsegen_test("", "<error>");
     parsegen_test(" \t ", "<error>");
+    parsegen_test(" \"\t\" ", "<error>");
     parsegen_test("{", "<error>");
     parsegen_test("[", "<error>");
     parsegen_test("\"\\uDBFFa", "<error>");
@@ -395,6 +500,11 @@ int main(void)
     parsegen_test_nocut("1 2", "<error>");
     parsegen_test("{4:5}", "<error>");
     parsegen_test("{:5}", "<error>");
+    parsegen_test("nan", "<error>");
+    parsegen_test("inf", "<error>");
+    parsegen_test_nocut("1e400", "<error>");
+    // Implementation choice.
+    parsegen_test("\"\\u0000\"", "<error>");
     // Deeper than the hardcoded 10 max. nesting depth in parsegen_test().
     parsegen_test("[[[[[[[[[[1]]]]]]]]]]", "<error>");
     // One level less.
@@ -426,19 +536,23 @@ int main(void)
     enable_extensions = false;
 
     test_mrealloc_oom("{\"field1\": [1, 2, 3, {\"f\": [4, 5, 6]}, "
-                      " {\"g\": [7, 8, 9, 10,12 ] }, 11], \"field2\" : 2}",
+                      " {\"g\": [7, 8, 9, 10,12,13,14,15,16 ] }, 11], \"field2\" : 2}",
                       "{\"field1\":[1,2,3,{\"f\":[4,5,6]},"
-                      "{\"g\":[7,8,9,10,12]},11],\"field2\":2}");
-
-    // The stuff above never actually tests json_parse_malloc() itself.
-    if (!run_test_("{\"a\":123,\"bc\":[]}", "{\"a\":123,\"bc\":[]}",
-                   0, 0, false, false, INT_MAX, false, true, false))
-    {
-        printf("mrealloc failed\n");
-        abort();
-    }
+                      "{\"g\":[7,8,9,10,12,13,14,15,16]},11],\"field2\":2}");
 
     test_malloc_helpers();
+
+    // shadow stack alloc overflow calculation
+    struct json_parse_opts opts = {.depth = INT_MAX};
+    assert(!json_parse_malloc("123", &opts));
+
+    opts.mrealloc = mrealloc;
+    assert(!json_parse_destructive("[\"abc\" ...]", NULL, 0, &opts));
+
+    uint64_t tmp[80];
+    assert(json_parse("123", tmp, sizeof(tmp), NULL));
+    // trigger very specific alignment alloc failure code path
+    assert(!json_parse("123", ((char *)tmp) + 1, sizeof(struct json_tok), NULL));
 
     printf("OK\n");
     return 0;
