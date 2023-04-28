@@ -22,6 +22,7 @@ Main features
   bounded stack, but not extremely resource constrained.
   You may need to provide implementations for some standard functions, see below.
 - Optional malloc() support for complex uses (including non-embedded).
+- Optional streaming input support (with json_parse_opts.read_input).
 - C11 (test.c and json_helpers_malloc.c also need strdup/strndup).
 
 How to use
@@ -89,7 +90,9 @@ these functions use recursion.
 
 A pull API was added even later. This doesn't build a token tree, but returns a
 stream of tokens. It's always destructive (see above), and needs memory only for
-the json_state struct and the shadow stack.
+the json_state struct and the shadow stack. Streaming input (read_input()
+callback) was also added later and can be combined with the pull API to minimize
+memory usage.
 
 Test programs
 -------------

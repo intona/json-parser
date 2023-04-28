@@ -37,9 +37,12 @@ struct json_state {
     bool pull_mode;
     bool initialized;
     bool pull_in_object;
+    bool end_reached;
     int idepth;             // inverse nesting depth
     struct curlist *top;    // top-most list element (NULL if none)
     struct json_parse_opts *opts;
+    char *pin_buf;          // streaming input mode: buffer to keep
+    size_t loc_offs;        // streaming input mode: error location reporting
     union {
         struct json_array arr;
         struct json_object obj;
@@ -60,6 +63,7 @@ union heap_align {
 };
 
 #define IS_POW_2(x) ((x) > 0 && !((x) & (x - 1)))
+#define MIN(a, b) ((a) > (b) ? (b) : (a))
 
 static void json_err_val(struct json_state *st, int err, const char *msg)
 {
@@ -67,8 +71,10 @@ static void json_err_val(struct json_state *st, int err, const char *msg)
         return;
     if (!st->opts->error)
         st->opts->error = err;
-    if (st->opts->msg_cb)
-        st->opts->msg_cb(st->opts->msg_cb_opaque, (st)->text - (st)->start, msg);
+    if (st->opts->msg_cb) {
+        st->opts->msg_cb(st->opts->msg_cb_opaque,
+                         st->loc_offs + ((st)->text - (st)->start), msg);
+    }
 }
 
 static void json_err(struct json_state *st, const char *msg)
@@ -168,9 +174,49 @@ static void *append_array(struct json_state *st, void *arr, size_t count,
 static bool parse_value(struct json_state *st, struct json_tok *tok);
 static char *parse_str(struct json_state *st);
 
+// Ensures st->text has at least JSON_LOOKAHEAD_SIZE bytes. Meaningful only
+// in streaming input mode. After the lookahead size, the input either continues,
+// or is cut short with a \0. If pin_buf is used (string tokens), the lookahead
+// may be lower, and the caller has to take care of it.
+// A return value !=0 means more input _may_ have been read, but if it didn't,
+// all remaining input is visible, and the next call is guaranteed to return 0.
+//  returns: input move offset, means the remaining input was moved by this many
+//           bytes to the start of the buffer, and the rest of the buffer
+//           possibly filled
+static size_t lookahead(struct json_state *st)
+{
+    if (!st->opts->read_input)
+        return 0;
+    char *end = st->start + st->opts->read_input_buffer_size;
+    if (end - st->text >= JSON_LOOKAHEAD_SIZE)
+        return 0;
+    char *pin = st->pin_buf ? st->pin_buf : st->text;
+    size_t move = pin - st->start;
+    size_t oldsz = end - st->text;
+    memmove(st->start, pin, end - pin);
+    st->pin_buf = st->pin_buf ? st->pin_buf - move : NULL;
+    st->text -= move;
+    st->loc_offs += move;
+    char *tend = st->text + oldsz;
+    if (end != tend && !st->end_reached) {
+        size_t amount = end - tend;
+        int r = st->opts->read_input(st->opts->read_input_opaque, tend, amount);
+        if (r >= 0) {
+            tend += r;
+            if (r < amount)
+                st->end_reached = true;
+        } else {
+            json_err_val(st, JSON_ERR_IO, "read error");
+        }
+    }
+    *tend = '\0'; // buffer is over-allocated by 1 byte for this
+    return move;
+}
+
 static void skip_ws(struct json_state *st)
 {
     for (;;) {
+        lookahead(st);
         st->text += strspn(st->text, " \t\r\n");
         if (st->opts->enable_extensions &&
             st->text[0] == '/' && st->text[1] == '/')
@@ -185,6 +231,7 @@ static void skip_ws(struct json_state *st)
 static bool skip_str(struct json_state *st, const char *str)
 {
     size_t str_len = strlen(str);
+    lookahead(st);
     if (strncmp(st->text, str, str_len) != 0)
         return false;
     st->text += str_len;
@@ -506,14 +553,17 @@ static size_t encode_utf8(char *dst, uint32_t cp)
 
 // dst==NULL to determine the dst allocation size.
 // In-place parsing uses dst==st->text (result is always shorter than input).
+// st->text is advanced if dst!=NULL or if an error happens.
 // Returns dst allocation size (final string length + 1), 0 on error.
 static size_t do_parse_str(struct json_state *st, char *dst)
 {
     if (st->text[0] != '"')
         return 0;
+    st->pin_buf = st->text;
     size_t len = 0;
     st->text += 1;
     while (1) {
+        lookahead(st);
         unsigned char c = st->text[0];
         if (!c) {
             json_err(st, "closing '\"' missing in string literal");
@@ -522,8 +572,12 @@ static size_t do_parse_str(struct json_state *st, char *dst)
         st->text += 1;
         if (c == '"') {
             len += 1;
-            if (dst)
+            if (dst) {
                 *dst = '\0';
+            } else {
+                st->text = st->pin_buf;
+            }
+            st->pin_buf = NULL;
             return len;
         } else if (c <= 0x1F) {
             json_err(st, "unescaped control character in string literal");
@@ -603,14 +657,12 @@ static char *parse_str(struct json_state *st)
         return do_parse_str(st, dst) ? dst : NULL;
     }
 
-    char *start = st->text;
     size_t len = do_parse_str(st, NULL);
     if (!len)
         return NULL;
     char *dst = json_alloc_align(st, len, 1);
     if (!dst)
         return NULL;
-    st->text = start;
     len = do_parse_str(st, dst);
     assert(len); // it's impossible for the second pass to fail
     return dst;
@@ -716,6 +768,18 @@ static struct json_tok *do_parse(char *text, void *mem, size_t mem_size,
     st->mem_ptr = st->stack_ptr + mem_size;
     st->stack_start = st->stack_ptr;
 
+    if (st->opts->read_input) {
+        //assert(st->opts->read_input_buffer_size >= JSON_MIN_READ_BUFFER);
+        assert(!text);
+        size_t sz = MIN((size_t)-1 - 1, st->opts->read_input_buffer_size) + 1;
+        st->start = json_alloc_align(st, sz, 1);
+        if (!st->start)
+            assert(0);
+        st->text = st->start + st->opts->read_input_buffer_size; // empty
+    }
+
+    st->end_reached = !st->opts->read_input;
+
     res = json_alloc(st, sizeof(*res));
     if (!res)
         goto done;
@@ -736,6 +800,8 @@ done:
         res = NULL;
     }
     json_mrealloc(st, stack_alloc, 0);
+    if (st->opts->read_input)
+        json_mrealloc(st, st->start, 0);
     return res;
 }
 

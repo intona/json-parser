@@ -71,7 +71,11 @@ enum json_error {
     JSON_ERR_NOMEM,         // failed due to provided memory not being enough
     JSON_ERR_DEPTH,         // failed due to json_parse_opts.depth exceeded
     JSON_ERR_INVAL,         // some kind of API usage error, or internal error
+    JSON_ERR_IO,            // read_input error (unused if read_input==NULL)
 };
+
+#define JSON_LOOKAHEAD_SIZE 8
+#define JSON_MIN_READ_BUFFER JSON_LOOKAHEAD_SIZE
 
 // Warning:
 // - To remain compatible with possible future extensions, you should always
@@ -107,6 +111,38 @@ struct json_parse_opts {
     // This is always set by json_parse() and related functions. If multiple
     // errors happen, this is set to the first one that was reported.
     enum json_error error;
+
+    // Optional callback for streaming input. In streaming input mode, this
+    // field and read_input_buffer_size must be set, and the text argument
+    // passed to the parser function must be NULL. json_pull_init_destructive()
+    // and json_parse() work. (json_parse_destructive() does not, because the
+    // resulting json_tok tree can't reference string tokens in the input
+    // buffer, which gets overwritten all the time.)
+    // When this is called, you read more input (up to dst_size) into the
+    // provided buffer and return the actual amount of bytes. If it's less than
+    // dst_size, the end of input has been reached. dst_size can be up to
+    // read_input_buffer_size, but can be smaller depending on the needs of the
+    // parser (but it's always >0).
+    // The read data doesn't need to include a terminating \0. If a \0 is
+    // encountered, it's considered the end of the JSON data and further input
+    // is ignored or not read.
+    //  read_input_opaque: the value in the json_parse_opts.read_input_opaque
+    //  dst: target buffer
+    //  dst_size: maximum number of bytes to read and copy to dst
+    //  returns: >=0 actual number of bytes read
+    //               (if <dst_size, it's the end of input)
+    //            <0: error, actual value ignored, propagated as JSON_ERR_IO
+    int (*read_input)(void *read_input_opaque, void *dst, size_t dst_size);
+
+    // Passed as first parameter to read_input(), unused otherwise.
+    void *read_input_opaque;
+
+    // Input buffer size in streaming mode. A buffer of this size is allocated
+    // internally and used to parse the input. This limits the size of largest
+    // parsable string token (length in JSON Input, including "" and +1 byte).
+    // This field must be at least JSON_MIN_READ_BUFFER if streaming mode is
+    // used.
+    size_t read_input_buffer_size;
 
     // Optional memory allocation function. If set to non-NULL, the JSON AST
     // returned by the parser is allocated using this function, instead of the
@@ -154,7 +190,7 @@ struct json_parse_opts {
 // Parse JSON and turn it into a tree of json_tok structs. All tokens are
 // allocated from the provided mem pointer. Returns the root token on success,
 // returns NULL on error (including if mem_size is too small).
-//  text: JSON source
+//  text: JSON source (or NULL if opts->read_input is used, see there)
 //  mem: scratch memory (will be overwritten and referenced by returned tokens)
 //  mem_size: size of mem memory area in bytes that can be used
 //  opts: can be NULL

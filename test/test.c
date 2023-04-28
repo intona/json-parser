@@ -17,6 +17,25 @@ static void json_msg_cb(void *opaque, size_t loc, const char *msg)
     printf("json parser (at %d): %s\n", (int)loc, msg);
 }
 
+struct readctx {
+    char *cur;
+    size_t remain;
+    size_t buf_size;
+};
+
+static int read_input(void *o, void *dst, size_t dst_size)
+{
+    struct readctx *ctx = o;
+    assert(dst_size <= ctx->buf_size); // parser is not supposed to do this
+    size_t copy = dst_size;
+    if (copy > ctx->remain)
+        copy = ctx->remain;
+    memcpy(dst, ctx->cur, copy);
+    ctx->cur += copy;
+    ctx->remain -= copy;
+    return copy;
+}
+
 static bool oom_enable;
 static size_t oom_left;
 static bool oom_hit;
@@ -118,6 +137,7 @@ struct testargs {
     bool silent;
     int input_len_1;
     int mem_disalign;
+    int stream_input;
     enum parser parser;
 };
 
@@ -153,28 +173,37 @@ static bool run_test_(const char *text, const char *expect, struct testargs *arg
     char *tmp3 = strdup(tmp1);
     assert(tmp1 && tmp3);
 
+    char *input = tmp1;
+    struct readctx ctx = {input, strlen(input), args->stream_input};
+
     struct json_parse_opts opts = {
         .depth = max_depth,
         .msg_cb = silent ? NULL : json_msg_cb,
         .mrealloc = parser == PARSER_MREALLOC ? mrealloc : NULL,
         .enable_extensions = enable_extensions,
+        .read_input = args->stream_input ? read_input : NULL,
+        .read_input_opaque = &ctx,
+        .read_input_buffer_size = args->stream_input,
     };
+
+    if (opts.read_input)
+        input = NULL;
 
     struct json_tok *tok = NULL;
     bool keeps_input = false;
     bool malloc_output = false;
 
     if (parser == PARSER_STATIC || parser == PARSER_MREALLOC) {
-        tok = json_parse(tmp1, mem_arg, max_mem, &opts);
+        tok = json_parse(input, mem_arg, max_mem, &opts);
         keeps_input = true;
         malloc_output = !!opts.mrealloc;
     } else if (parser == PARSER_MALLOC) {
-        tok = json_parse_malloc(tmp1, &opts);
+        tok = json_parse_malloc(input, &opts);
         keeps_input = true;
         malloc_output = true;
     } else if (parser == PARSER_PULL) {
         struct json_state *st =
-            json_pull_init_destructive(tmp1, mem_arg, max_mem, &opts);
+            json_pull_init_destructive(input, mem_arg, max_mem, &opts);
         if (st) {
             tok = json_copy(&(struct json_tok){0});
             assert(tok);
@@ -185,7 +214,7 @@ static bool run_test_(const char *text, const char *expect, struct testargs *arg
             malloc_output = true;
         }
     } else if (parser == PARSER_STATIC_DESTRUCTIVE) {
-        tok = json_parse_destructive(tmp1, mem_arg, max_mem, &opts);
+        tok = json_parse_destructive(input, mem_arg, max_mem, &opts);
     } else {
         assert(0);
     }
@@ -261,6 +290,16 @@ static void parsegen_test_full(const char *text, const char *expect,
         } else if (res != r) {
             printf("inconsistent\n");
             abort();
+        }
+
+        if (parser == PARSER_STATIC) {
+            struct testargs args3 = args2;
+            args3.stream_input = 40; // enough for all current tests
+            bool r2 = run_test_(text, expect, &args3);
+            if (res != r2) {
+                printf("inconsistent (2)\n");
+                abort();
+            }
         }
 
         // Test min. stack depth that works.
@@ -618,6 +657,8 @@ int main(void)
     parsegen_test(" \"\t\" ", "<error>");
     parsegen_test("{", "<error>");
     parsegen_test("[", "<error>");
+    parsegen_test("\"\\x\"", "<error>");
+    parsegen_test("\"\\", "<error>");
     parsegen_test("\"\\uDBFFa", "<error>");
     parsegen_test("\"\\uDBFF\\uAFFF\"", "<error>");
     parsegen_test_nocut("1 2", "<error>");
@@ -671,9 +712,11 @@ int main(void)
     assert(!json_parse_malloc("123", &opts));
 
     opts.mrealloc = mrealloc;
+    opts.depth = 4;
     assert(!json_pull_init_destructive("", NULL, 0, &opts));
     assert(!json_pull_init_destructive("", NULL, 0, NULL));
     assert(!json_parse_destructive("[\"abc\" ...]", NULL, 0, &opts));
+    json_free(opts.mrealloc_waste);
 
     uint64_t tmp[80];
     assert(json_parse("123", tmp, sizeof(tmp), NULL));
