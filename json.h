@@ -196,6 +196,8 @@ enum json_pull {
     JSON_PULL_END,          // end of JSON input reached (redundant, because the
                             // caller is supposed to track nesting of tokens)
     JSON_PULL_TOK,          // a token was parsed (json_tok arg is set)
+    JSON_PULL_KEY,          // an object key was parsed (json_tok arg is set)
+                            // (needed because there is no object key token)
     JSON_PULL_CLOSE_LIST,   // an array or object was closed
 };
 
@@ -204,15 +206,19 @@ enum json_pull {
 // Strings returned in *out are valid until the next call, and point into the
 // user memory or the JSON input text. Returned JSON_TYPE_ARRAY/JSON_TYPE_OBJECT
 // tokens are dummies with 0 items.
+// Objects in particular return sequences of JSON_PULL_KEY/JSON_PULL_TOK pairs
+// in guaranteed order: the first token is always JSON_PULL_KEY,
+// JSON_PULL_CLOSE_LIST, or JSON_PULL_ERROR; the second token is always
+// JSON_PULL_TOK or JSON_PULL_ERROR; then the same again.
+// JSON_PULL_KEY will set out to JSON_TYPE_STRING. This is guaranteed and the
+// caller can just access out->u.str directly after checking that JSON_PULL_KEY
+// was returned. Note that it becomes invalid on the next pull call.
 //  st: state allocated with json_pull_init_destructive()
-//  out: written by the function; valid if JSON_PULL_TOK was returned, otherwise
-//       the contents are undefined; treat any referenced memory as read-only
-//  out_obj_key: *out_obj_key set by the function; valid if JSON_PULL_TOK was
-//       returned and an object is being parsed (then it has similar life time
-//       as string tokens returned in *out); NULL if not parsing an object
-//  returns: parser state, JSON_PULL_TOK if *out was set to a valid value
-enum json_pull json_pull_next(struct json_state *st, struct json_tok *out,
-                              char **out_obj_key);
+//  out: written by the function; valid if JSON_PULL_TOK or JSON_PULL_KEY was
+//       returned, otherwise the contents are undefined; treat any referenced
+//       memory as read-only; strictly becomes invalid on the next call
+//  returns: parser state, JSON_PULL_TOK/KEY if *out was set to a valid value
+enum json_pull json_pull_next(struct json_state *st, struct json_tok *out);
 
 // Skip all tokens until the current array or object ends. Error information is
 // returned with the next json_pull_next() call (and opts->msg_cb, if set).

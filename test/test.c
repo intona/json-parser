@@ -25,17 +25,18 @@ static bool enable_extensions;
 // (just in case you're wondering: this wouldn't be as easy to do without malloc)
 static bool pull_to_tree(struct json_state *st, struct json_tok *dst)
 {
+    char *key = NULL;
     while (1) {
         struct json_tok tok;
-        char *key;
-        enum json_pull ev = json_pull_next(st, &tok, &key);
+        enum json_pull ev = json_pull_next(st, &tok);
 
         switch (ev) {
         case JSON_PULL_ERROR:
-            assert(json_pull_next(st, &tok, &key) == ev);
+            free(key);
+            assert(json_pull_next(st, &tok) == ev);
             return false;
         case JSON_PULL_END:
-            assert(json_pull_next(st, &tok, &key) == ev);
+            assert(json_pull_next(st, &tok) == ev);
             return true;
         case JSON_PULL_CLOSE_LIST:
             return true;
@@ -53,6 +54,8 @@ static bool pull_to_tree(struct json_state *st, struct json_tok *dst)
             } else if (dst->type == JSON_TYPE_OBJECT) {
                 assert(key);
                 json_set_nocopy(dst, key, &ntok);
+                free(key);
+                key = NULL;
             } else if (dst->type == JSON_TYPE_ARRAY) {
                 json_array_insert_nocopy(dst, dst->u.array->count, &ntok);
             } else {
@@ -63,6 +66,10 @@ static bool pull_to_tree(struct json_state *st, struct json_tok *dst)
                 return false;
             break;
         }
+        case JSON_PULL_KEY:
+            key = strdup(tok.u.str);
+            assert(key);
+            break;
         default:
             assert(0);
         }
@@ -505,26 +512,31 @@ static void test_pull_skip(void)
         json_pull_init_destructive(input, tmp, sizeof(tmp), &opts);
     assert(st);
     struct json_tok t;
-    char *k;
     int r;
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_OBJECT);
-    r = json_pull_next(st, &t, &k);
-    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY && strcmp(k, "a") == 0);
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
+    assert(r == JSON_PULL_KEY && t.type == JSON_TYPE_STRING && !strcmp(t.u.str, "a"));
+    r = json_pull_next(st, &t);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_DOUBLE && t.u.d == 1);
     json_pull_skip_nested(st);
-    r = json_pull_next(st, &t, &k);
-    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY && strcmp(k, "b") == 0);
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
+    assert(r == JSON_PULL_KEY && t.type == JSON_TYPE_STRING && !strcmp(t.u.str, "b"));
+    r = json_pull_next(st, &t);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_DOUBLE && t.u.d == 5);
     json_pull_skip_nested(st); // returns to previous, even if CLOSE_LIST is next
-    r = json_pull_next(st, &t, &k);
-    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY && strcmp(k, "c") == 0);
+    r = json_pull_next(st, &t);
+    assert(r == JSON_PULL_KEY && t.type == JSON_TYPE_STRING && !strcmp(t.u.str, "c"));
+    r = json_pull_next(st, &t);
+    assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY);
     json_pull_skip_nested(st);
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_CLOSE_LIST);
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_END);
     // end remains
     json_pull_skip_nested(st);
@@ -532,18 +544,18 @@ static void test_pull_skip(void)
     // not in a list
     st = json_pull_init_destructive("123", tmp, sizeof(tmp), &opts);
     json_pull_skip_nested(st);
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_DOUBLE && t.u.d == 123);
     // error during skipping
     st = json_pull_init_destructive("[1,2,3,,", tmp, sizeof(tmp), &opts);
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_TOK && t.type == JSON_TYPE_ARRAY);
     json_pull_skip_nested(st);
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_ERROR);
     // error remains
     json_pull_skip_nested(st);
-    r = json_pull_next(st, &t, &k);
+    r = json_pull_next(st, &t);
     assert(r == JSON_PULL_ERROR);
 }
 

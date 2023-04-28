@@ -36,13 +36,14 @@ struct json_state {
     bool destructive;
     bool pull_mode;
     bool initialized;
+    bool pull_in_object;
     int idepth;             // inverse nesting depth
     struct curlist *top;    // top-most list element (NULL if none)
     struct json_parse_opts *opts;
     union {
         struct json_array arr;
         struct json_object obj;
-    } dummy; // for pull mode
+    } dummy; // for pull mode, assumes same zero-init for both types
 };
 
 struct curlist {
@@ -345,24 +346,35 @@ static struct json_object_entry *alloc_obj_item(struct json_state *st,
     return e;
 }
 
-static bool parse_obj(struct json_state *st, struct json_object_entry *e)
+static char *parse_obj_key(struct json_state *st)
 {
     skip_ws(st);
-    e->key = parse_str(st);
-    if (!e->key) {
+    char *key = parse_str(st);
+    if (!key)
         json_err(st, "object member name expected (quoted string)");
-        return false;
-    }
+    return key;
+}
+
+static bool parse_obj_value(struct json_state *st, struct json_tok *val)
+{
     skip_ws(st);
     if (!skip_str(st, ":")) {
         json_err(st, "':' after object member name expected");
         return false;
     }
 
-    bool r = parse_value(st, &e->value);
+    bool r = parse_value(st, val);
     if (!r)
         json_err(st, "object value expected");
     return r;
+}
+
+static bool parse_obj(struct json_state *st, struct json_object_entry *e)
+{
+    e->key = parse_obj_key(st);
+    if (!e->key)
+        return false;
+    return parse_obj_value(st, &e->value);
 }
 
 static struct json_tok *alloc_arr_item(struct json_state *st,
@@ -770,12 +782,8 @@ struct json_state *json_pull_init_destructive(char *text,
     return st;
 }
 
-enum json_pull json_pull_next(struct json_state *st, struct json_tok *out,
-                              char **out_obj_key)
+enum json_pull json_pull_next(struct json_state *st, struct json_tok *out)
 {
-    *out = (struct json_tok){0};
-    *out_obj_key = NULL;
-
     if (st->opts->error)
         goto error;
 
@@ -783,6 +791,13 @@ enum json_pull json_pull_next(struct json_state *st, struct json_tok *out,
         // First token.
         st->initialized = true;
         if (!parse_value(st, out))
+            goto error;
+        return JSON_PULL_TOK;
+    }
+
+    if (st->pull_in_object) {
+        st->pull_in_object = false;
+        if (!parse_obj_value(st, out))
             goto error;
         return JSON_PULL_TOK;
     }
@@ -803,17 +818,16 @@ enum json_pull json_pull_next(struct json_state *st, struct json_tok *out,
     }
 
     if (st->top->is_object) {
-        struct json_object_entry pobj = {0};
-        if (!parse_obj(st, &pobj))
+        *out = (struct json_tok){JSON_TYPE_STRING, .u.str = parse_obj_key(st)};
+        if (!out->u.str)
             goto error;
-        *out = pobj.value;
-        *out_obj_key = (char *)pobj.key;
+        st->pull_in_object = true;
+        return JSON_PULL_KEY;
     } else {
         if (!parse_arr(st, out))
             goto error;
+        return JSON_PULL_TOK;
     }
-
-    return JSON_PULL_TOK;
 
 error:
     assert(st->opts->error);
@@ -829,9 +843,8 @@ void json_pull_skip_nested(struct json_state *st)
     int depth = st->idepth;
     while (st->idepth <= depth) {
         struct json_tok tok;
-        char *key;
-        enum json_pull r = json_pull_next(st, &tok, &key);
-        if (r != JSON_PULL_TOK && r != JSON_PULL_CLOSE_LIST)
+        enum json_pull r = json_pull_next(st, &tok);
+        if (r != JSON_PULL_TOK && r != JSON_PULL_KEY && r != JSON_PULL_CLOSE_LIST)
             return;
     }
 }
