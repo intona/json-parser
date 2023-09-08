@@ -21,6 +21,7 @@ Main features
 - Suitable for embedded use. (You may need to provide implementations for some
   standard functions, see below.)
 - Optional malloc() support for complex uses (including non-embedded).
+- C11 (test.c and json_helpers_malloc.c also need strdup/strndup).
 
 How to use
 ----------
@@ -139,11 +140,6 @@ TODO
   which can report errors in a human readable way. (Consider you use JSON for
   a network API. You want to provide good error information to API users if e.g.
   a JSON object key is missing or has the wrong type.)
-- There are some optimization opportunities, but which probably would increase
-  code size. (Such as the array/object item reorder copy.)
-- Consider changing API by removing json_object, and replacing it with
-  json_array, whose items all are of type JSON_TYPE_OBJECT_ENTRY, which would
-  point to an allocated json_object_entry.
 
 Incompatible API changes
 ------------------------
@@ -161,6 +157,14 @@ This lists incompatible API changes done starting 2022.
     json_parse[_destructive] with json_parse_opts.mrealloc set to non-NULL and
     mem_size argument set to 0 behaves differently: it allocates a stack with
     mrealloc, instead of probably failing to parse the input.
+
+Mistakes
+--------
+
+- Maybe JSON_TYPE_OBJECT should have used struct json_array, with alternating
+  key and value entries (instead of an array of struct json_object_entry items).
+  This would make many things simpler, but it's probably not a good idea to
+  radically change the API at this time.
 
 License
 -------

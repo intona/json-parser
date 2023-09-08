@@ -73,6 +73,13 @@ enum json_error {
     JSON_ERR_INVAL,         // some kind of API usage error, or internal error
 };
 
+// Warning:
+// - To remain compatible with possible future extensions, you should always
+//   zero-init the entire struct.
+// - All callbacks must return normally. If any of them return by longjmp() or
+//   throw C++ exceptions, the behavior is undefined. Callbacks are not expected
+//   to write to json_parse_opts, the input, the memory, etc. passed to the
+//   parser functions.
 struct json_parse_opts {
     // Maximum nesting of JSON elements allowed. The parser's depth value starts
     // out with 1. Every nested object or array adds 1 to it. If the value is
@@ -105,7 +112,7 @@ struct json_parse_opts {
     // returned by the parser is allocated using this function, instead of the
     // memory provided to the json_parse group of functions.
     // Please use json_parse_malloc() instead, which is a wrapper around this,
-    // and uses system malloc() while taking care of the messy details.
+    // and uses system realloc() while taking care of the messy details.
     //
     // For sz!=0, mrealloc(_, p, sz) must behave exactly as standard C
     // realloc(p, sz) (though errno does not need to be set).
@@ -120,6 +127,8 @@ struct json_parse_opts {
     //    the parser will allocate a shadow stack with mrealloc; if not, mem
     //    is used for the shadow stack; in all cases the parsing function still
     //    has constant C stack usage
+    // The returned pointer must have suitable alignment (standard realloc()
+    // takes care of this).
     // Arrays/objects are over-allocated to power of 2 boundaries, which is due
     // to pre-allocation during parsing, and trades higher internal
     // fragmentation for speed.
